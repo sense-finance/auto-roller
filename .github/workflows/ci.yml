@@ -1,0 +1,39 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.ACCESS_TOKEN }}
+          
+      - name: Run Slither
+        uses: crytic/slither-action@dev-install-foundry
+        id: slither
+        continue-on-error: true
+        with:
+          sarif: results.sarif
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: ${{ steps.slither.outputs.sarif }}
+          
+  run-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.ACCESS_TOKEN }}
+
+      - name: Install Foundry
+        uses: onbjerg/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Run forge tests
+        run: forge test
