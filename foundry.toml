@@ -1,7 +1,20 @@
 [default]
 src = 'src'
 out = 'out'
-libs = ['lib']
-remappings = ['ds-test/=lib/ds-test/src/']
-
-# See more config options https://github.com/gakonst/foundry/tree/master/config
+libs = ['lib', 'lib/space-v1/lib/','lib/sense-v1/node_modules/']
+verbosity = 3
+eth-rpc-url = "https://eth-mainnet.alchemyapi.io/v2/q13IQLf_TGiCQ4BuqQfdupzbe7bBuf2x"
+# Block mined at Fri Apr 08 2022 12:52:05 GMT-0400 (GMT-04:00)
+fork_block_number = 14546317
+remappings = [
+    'ds-test/=lib/ds-test/src/',
+    'sense-v1-core/=lib/sense-v1/pkg/core/src/',
+    'sense-v1-utils/=lib/sense-v1/pkg/utils/src/',
+    '@rari-capital/=lib/sense-v1/node_modules/@rari-capital/',
+    '@openzeppelin/contracts=lib/sense-v1/node_modules/@openzeppelin/contracts',
+    '@sense-finance/=lib/sense-v1/node_modules/@sense-finance/',
+    # '@balancer-labs/v2-solidity-utils/=lib/space-v1/lib/balancer-v2-monorepo/pkg/solidity-utils/',
+    # '@balancer-labs/v2-pool-utils/=lib/space-v1/lib/balancer-v2-monorepo/pkg/pool-utils/',
+    # '@balancer-labs/v2-vault/=lib/space-v1/lib/balancer-v2-monorepo/pkg/vault/'
+    # '@balancer-labs/=lib/space-v1/lib/balancer-v1-monorepo/',
+]
