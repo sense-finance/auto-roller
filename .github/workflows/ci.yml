@@ -2,7 +2,7 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  analyze:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -31,18 +31,18 @@ jobs:
         with:
           sarif_file: ${{ steps.slither.outputs.sarif }}
           
-  run-ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: recursive
-          token: ${{ secrets.ACCESS_TOKEN }}
+  # run-ci:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #       with:
+  #         submodules: recursive
+  #         token: ${{ secrets.ACCESS_TOKEN }}
 
-      - name: Install Foundry
-        uses: onbjerg/foundry-toolchain@v1
-        with:
-          version: nightly
+  #     - name: Install Foundry
+  #       uses: onbjerg/foundry-toolchain@v1
+  #       with:
+  #         version: nightly
 
-      - name: Run forge tests
-        run: forge test
+  #     - name: Run forge tests
+  #       run: forge test
