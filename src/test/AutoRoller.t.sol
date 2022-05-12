@@ -37,30 +37,10 @@ contract MockAdapter is BaseAdapter {
         address _divider,
         address _target,
         address _underlying,
-        address _oracle,
-        uint256 _ifee,
-        address _stake,
-        uint256 _stakeSize,
-        uint256 _minm,
-        uint256 _maxm,
-        uint16 _mode,
-        uint64 _tilt
+        uint128 _ifee,
+        AdapterParams memory _adapterParams
     )
-        BaseAdapter(
-            _divider,
-            _target,
-            _underlying,
-            _oracle,
-            _ifee,
-            _stake,
-            _stakeSize,
-            _minm,
-            _maxm,
-            _mode,
-            _tilt,
-            0x1 + 0x4 + 0x8 + 0x10 // Restrict issuance, enable all other lifecycle methods
-            // NOTE: level is set so that issaunce can *only* be done through this adapter's custom issuance function
-        )
+        BaseAdapter(_divider, _target, _underlying, _ifee, _adapterParams)
     {
         owner = _owner;
     }
@@ -160,19 +140,24 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         autoRoller = new AutoRoller(target, address(spaceFactory), "Auto Roller", "AR");
 
+        BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
+            oracle: address(0),
+            stake: address(new MockERC20("Stake", "ST", 18)), // stake size is 0, so the we don't actually need any stake token
+            stakeSize: 0,
+            minm: 0, // 0 minm, so there's not lower bound on future maturity
+            maxm: type(uint64).max, // large maxm, so there's not upper bound on future maturity
+            mode: 0, // monthly maturities
+            tilt: 0, // no principal reserved for YTs
+            level: 31 // default level, everything is allowed except for the redemption cb
+        });
+
         mockAdapter = new MockAdapter(
             address(autoRoller),
             address(divider),
             address(target),
             address(underlying),
-            address(0),
             0, // no issuance fees
-            address(new MockERC20("dummy", "dmy", 18)), // stake size is 0, so the we don't actually need any stake token
-            0,
-            0, // 0 minm, so there's not lower bound on future maturity
-            type(uint64).max, // large maxm, so there's not upper bound on future maturity
-            0, // monthly maturities
-            0 // no principal reserved for YTs
+            mockAdapterParams
         );
 
         target.mint(address(this), 2e18);

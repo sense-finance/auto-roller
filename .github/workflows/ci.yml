@@ -9,6 +9,15 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.ACCESS_TOKEN }}
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 14
+          cache: yarn
+
+      - name: Install npm dependencies
+        working-directory: ./lib/sense-v1
+        run: yarn
           
       - name: Run Slither
         uses: crytic/slither-action@dev-install-foundry

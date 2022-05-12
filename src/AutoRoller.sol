@@ -42,6 +42,13 @@ contract AutoRoller is ERC4626, Trust {
     uint256 public beforeWithdrawHookCalledCounter = 0;
     uint256 public afterDepositHookCalledCounter = 0;
 
+    struct Series {
+        address yt;
+        address pt;
+        address space;
+    }
+    Series public activeSeries;
+
     constructor(
         ERC20 _target,
         // address _adapter,
@@ -66,11 +73,39 @@ contract AutoRoller is ERC4626, Trust {
     }
     // Adapter callback
     function onSponsorWindowOpened() public {
+
+        // take TWAR from space pool and initialize a price on the new space pool
+        // pay the caller some small fee (privledged role or mev?)
+
+        // withdraw, redeem
+
+        // uint256 nextMaturity = now + 1;
+
+        // Get token balances
+        // uint256 targetBal = target.balanceOf(this);
+
+        // assume that we can swap the pts out for target
+
+        // Sponsor the new Series
+        // (address pt, address yt) = periphery.sponsorSeries(address(adapter), nextMaturity, true);
+        // address space = spaceFactory.pools(address(adapter), nextMaturity);
+
+        // Issue PTs
+        // targetBal
+        // fair reserves calc given the target balance and 
+        // divider.issue(address(adapter), nextMaturity, target.balanceOf(this));
+
         // adapter.
 
     }
 
+    // should we keep 80% in the pool or something?
+
+
+
     function totalAssets() public view override returns (uint256) {
+        // lp shares -> target and pt shares -> target
+
         return asset.balanceOf(address(this));
     }
 
