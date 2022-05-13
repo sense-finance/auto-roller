@@ -11,20 +11,20 @@ import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
-import { Divider } from "sense-v1-core/Divider.sol";
+import { Divider, TokenHandler } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
 import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
 import { Errors } from "sense-v1-utils/libs/Errors.sol";
 
 import { AddressBook } from "./utils/AddressBook.sol";
 import { Space } from "../interfaces/Space.sol";
-import { AutoRoller, SpaceFactoryLike } from "../AutoRoller.sol";
+import { AutoRoller, SpaceFactoryLike, OwnableAdapter } from "../AutoRoller.sol";
 
 interface Opener {
     function onSponsorWindowOpened() external;
 }
 
-contract MockAdapter is BaseAdapter {
+contract MockAdapter is OwnableAdapter {
     using SafeTransferLib for ERC20;
     uint256 public override scale = 1.1e18;
     uint256 internal open = 1;
@@ -87,7 +87,7 @@ contract MockAdapter is BaseAdapter {
         scale = _scale;
     }
 
-    function openSponsorWindow() external {
+    function openSponsorWindow() external override {
         if(msg.sender != owner) revert OnlyOwner();
         open = 2;
         Opener(msg.sender).onSponsorWindowOpened();
@@ -95,7 +95,8 @@ contract MockAdapter is BaseAdapter {
     }
 
     function getMaturityBounds() external view override returns (uint256, uint256) {
-        return open == 2 ? (0, type(uint64).max) : (0, 0);
+        // Open to any maturity
+        return open == 2 ? (0, type(uint64).max / 2) : (0, 0);
     }
 }
 
@@ -129,16 +130,24 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             AddressBook.BALANCER_VAULT,
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_2_0)
         );
-        Periphery existingPeriphery = Periphery(AddressBook.PERIPHERY_1_2_1);
+        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_2_1);
         divider = Divider(spaceFactory.divider());
+
+        // TokenHandler tokenHandler = new TokenHandler();
+        // Divider dividerOverride = new Divider(address(this), address(tokenHandler));
+        // dividerOverride.setPeriphery(address(this));
+        // tokenHandler.init(address(dividerOverride));
+
+        // vm.etch(address(divider), address(dividerOverride).code);
 
         vm.label(address(spaceFactory), "SpaceFactory");
         vm.label(address(divider), "Divider");
+        vm.label(address(periphery), "Periphery");
         vm.label(vault, "BalancerVault");
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
 
-        autoRoller = new AutoRoller(target, address(spaceFactory), "Auto Roller", "AR");
+        autoRoller = new AutoRoller(target, address(spaceFactory), address(periphery), "Auto Roller", "AR");
 
         BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
@@ -164,12 +173,12 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         // Start multisig (admin) prank calls   
         vm.startPrank(AddressBook.SENSE_MULTISIG);
-        existingPeriphery.onboardAdapter(address(mockAdapter), true);
+        periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
         vm.stopPrank();
         // Stop pranking calls
 
-        // (address _pt, address _yt) = existingPeriphery.sponsorSeries(address(mockAdapter), MATURITY, true);
+        // (address _pt, address _yt) = periphery.sponsorSeries(address(mockAdapter), MATURITY, true);
         // pt = ERC20(_pt);
         // yt = ERC20(_yt);
 
@@ -241,6 +250,13 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
         // Check that only no storage slots were written to
         assertEq(writes.length, 0);
+    }
+
+    function testRoll() public {
+        // 1. Mint some tokens to Alice
+        autoRoller.init(mockAdapter);
+        autoRoller.roll();
+        // revert();
     }
 
     function testDeploy() public {
