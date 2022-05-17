@@ -41,16 +41,17 @@ contract AutoRoller is ERC4626, Trust {
     OwnableAdapter public adapter;
     SpaceFactoryLike public spaceFactory;
     Periphery public periphery;
+    Divider public divider;
+    ERC20 public target;
+
     
     uint256 public beforeWithdrawHookCalledCounter = 0;
     uint256 public afterDepositHookCalledCounter = 0;
 
-    struct Series {
-        address yt;
-        address pt;
-        address space;
-    }
-    Series public activeSeries;
+    // Active Series
+    address public yt;
+    address public pt;
+    address public space;
 
     // Months between series
     uint8 public gap;
@@ -59,7 +60,7 @@ contract AutoRoller is ERC4626, Trust {
 
     constructor(
         ERC20 _target,
-        // address _adapter,
+        Divider _divider,
         address _spaceFactory,
         address _periphery,
         string memory _name,
@@ -69,7 +70,10 @@ contract AutoRoller is ERC4626, Trust {
         spaceFactory = SpaceFactoryLike(_spaceFactory);
         periphery = Periphery(_periphery);
         gap = 3;
-        // _target.approve(address(_adapter), type(uint256).max);
+        target = _target;
+        divider = _divider;
+
+        target.approve(address(divider), type(uint256).max);
     }
 
     function init(OwnableAdapter _adapter) public {
@@ -83,15 +87,16 @@ contract AutoRoller is ERC4626, Trust {
         // pay the caller some small fee (privledged role or mev?)
     }
     // Adapter callback
-    event A(uint);
     function onSponsorWindowOpened() public {
 
-        // take TWAR from space pool and initialize a price on the new space pool
         // pay the caller some small fee (privledged role or mev?)
 
         // withdraw, redeem
 
         // uint256 nextMaturity = now + 1;
+
+        // get twar
+        // * if twar unavailable, use fallback implied rate
 
         (uint256 year, uint256 month, ) = DateTimeFull.timestampToDate(block.timestamp);
         uint256 monthToSponsor = month + gap;
@@ -105,29 +110,23 @@ contract AutoRoller is ERC4626, Trust {
             0
         );
         (uint256 minm, uint256 maxm) = adapter.getMaturityBounds();
-        emit A(nextSeriesMaturity);
-        emit A(block.timestamp + minm);
-        emit A(block.timestamp + maxm);
 
         (, , uint256 day, uint256 hour, uint256 minute, uint256 second) = DateTimeFull.timestampToDateTime(nextSeriesMaturity);
-        emit A(day);
-        emit A(hour);
-        emit A(minute);
-        emit A(second);
 
         // Get token balances
-        // uint256 targetBal = target.balanceOf(this);
 
         // assume that we can swap the pts out for target
 
         // Sponsor the new Series
-        (address pt, address yt) = periphery.sponsorSeries(address(adapter), nextSeriesMaturity, true);
-        address space = spaceFactory.pools(address(adapter), nextMaturity);
+        (pt, yt) = periphery.sponsorSeries(address(adapter), nextSeriesMaturity, true);
+        space = spaceFactory.pools(address(adapter), nextSeriesMaturity);
+
+        uint256 targetBal = target.balanceOf(address(this));
 
         // Issue PTs
         // targetBal
         // fair reserves calc given the target balance and 
-        // divider.issue(address(adapter), nextMaturity, target.balanceOf(this));
+        divider.issue(address(adapter), nextSeriesMaturity, targetBal);
 
 
     }

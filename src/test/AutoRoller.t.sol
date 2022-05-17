@@ -147,7 +147,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
 
-        autoRoller = new AutoRoller(target, address(spaceFactory), address(periphery), "Auto Roller", "AR");
+        autoRoller = new AutoRoller(target, divider, address(spaceFactory), address(periphery), "Auto Roller", "AR");
 
         BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
@@ -255,8 +255,9 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     function testRoll() public {
         // 1. Mint some tokens to Alice
         autoRoller.init(mockAdapter);
+        target.mint(address(autoRoller), 2e18); // FIXME
         autoRoller.roll();
-        // revert();
+        revert();
     }
 
     function testDeploy() public {
