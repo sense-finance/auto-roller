@@ -13,3 +13,6 @@
 [submodule "lib/space-v1"]
 	path = lib/space-v1
 	url = https://github.com/sense-finance/space-v1
+[submodule "lib/prb-math"]
+	path = lib/prb-math
+	url = https://github.com/hifi-finance/prb-math
