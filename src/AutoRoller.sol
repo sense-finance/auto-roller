@@ -40,25 +40,7 @@ abstract contract OwnableAdapter is Adapter {
     }
 }
 
-// options for dust:
-// 1. don't allow ppl to leave dust
-// 2. claims for the next roll
-// 3. give back pts
-// 4. have the roller leave some capital in
-// 5. grounded pt price
-
-// Ribbon-style keep 20% liquid for insta withdrawals?
-
-// two phases for this contract:
-// * target only
-// * lp shares and yts
-// tween interpolation between rates
-
-// can exit size into target for a bad price
-
-// could we do this with an x4626-like contract?
 contract AutoRoller is ERC4626, Trust {
-    // using SafeCastLib for *;
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int256;
@@ -86,6 +68,8 @@ contract AutoRoller is ERC4626, Trust {
 
     /* ========== MUTABLE STORAGE ========== */
 
+    mapping(uint256 => uint256) public cash;
+
     PeripheryLike    public periphery;
     SpaceFactoryLike public spaceFactory;
 
@@ -97,21 +81,14 @@ contract AutoRoller is ERC4626, Trust {
     bytes32 public poolId;
     uint256 public initScale;
     uint256 public maturity = MATURITY_NOT_SET;
-    // TODO should this be a struct that can be deleted?
 
-    // Months between series
-    uint8 public gap = 3;
-
-    // Months between series
     uint256 public maxRate = 2e18;
     uint256 public fallbackRate = 0.12e18;
 
     uint256 targetDuration = 3;
     uint256 rollDistance = 30 days;
+    uint256 lastRoll;
 
-    uint32 public lastRoll;
-    uint32 public rewardsCycleEnd;
-    uint192 public lastRewardAmount;
 
     constructor(
         ERC20 _target,
@@ -144,6 +121,137 @@ contract AutoRoller is ERC4626, Trust {
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
     }
 
+    /* ========== SERIES MANAGEMENT ========== */
+
+    function roll() external {
+        if (lastRoll != 0 || lastRoll + rollDistance > block.timestamp) revert RollWindowNotOpen();
+
+        if (block.timestamp > maturity) {
+            settle();
+        }
+
+        if (maturity != MATURITY_NOT_SET) {
+            (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
+
+            cash[maturity] = excessBal; // Cash the excess PTs or YTs for future redemption.
+        }
+
+        uint256 assetBal = asset.balanceOf(address(this));
+        uint256 baseUnit = 10**asset.decimals();
+        if (assetBal < baseUnit) {
+            unchecked {
+                // Ensure there's enough Target in this contract to initialize a rate.
+                deposit(baseUnit - assetBal, msg.sender);
+            }
+        }
+
+        adapter.openSponsorWindow();
+
+        lastRoll = block.timestamp;
+    } function onSponsorWindowOpened() external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
+        if (msg.sender != address(adapter)) revert OnlyAdapter();
+
+        (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, targetDuration));
+
+        uint256 nextMaturity = DateTime.timestampFromDateTime(
+            year,
+            month,
+            1, // Top of month only.
+            0,
+            0,
+            0
+        );
+
+        // Assign Series data.
+        (pt, yt)  = periphery.sponsorSeries(address(adapter), nextMaturity, true);
+        space     = spaceFactory.pools(address(adapter), nextMaturity);
+        pti       = space.pti();
+        poolId    = space.getPoolId();
+        maturity  = nextMaturity;
+        initScale = adapter.scale();
+
+        uint256 targetedRate;
+
+        (, , , , , , uint256 sampleTs) = space.getSample(space.getTotalSamples() - 1);
+        if (sampleTs > 0) {
+            Space.OracleAverageQuery[] memory queries = new Space.OracleAverageQuery[](1);
+            queries[0] = Space.OracleAverageQuery({
+                variable: Space.Variable.BPT_PRICE, // For Space, the BPT_PRICE slot contains the stretched implied rate.
+                secs: space.getLargestSafeQueryWindow() - 1 hours,
+                ago: 1 hours
+            });
+
+            uint256[] memory results = space.getTimeWeightedAverage(queries);
+
+            targetedRate = _powWad(results[0] + ONE, space.ts().mulWadDown(SECONDS_PER_YEAR * ONE)) - ONE;
+        } else {
+            targetedRate = fallbackRate;
+        }
+
+        // Allow Balancer to move the new PTs for joins & swaps.
+        pt.approve(address(balancerVault), type(uint256).max);
+
+        // Allow Periphery to move the new YTs for swaps.
+        yt.approve(address(periphery), type(uint256).max);
+
+        ERC20[] memory tokens = new ERC20[](2);
+        tokens[pti]      = pt;
+        tokens[1 - pti]  = asset; // todo(JOSH): don't make this an SLOAD
+
+        uint256 targetBal = asset.balanceOf(address(this));
+        uint256 scale     = adapter.scale();
+
+        (uint256 eqPTReserves, uint256 eqTargetReserves) = _getEQReserves(
+            fallbackRate,
+            nextMaturity,
+            0,
+            targetBal,
+            targetBal.mulWadDown(scale),
+            scale
+        );
+
+        divider.issue(address(adapter), nextMaturity, _getTargetForIssuance(
+            eqPTReserves, eqTargetReserves, targetBal, scale
+        ));
+
+        uint256[] memory balances = new uint256[](2);
+        balances[1 - pti] = asset.balanceOf(address(this));
+
+        // Initialize the targeted rate in the Space pool.
+        _joinPool(
+            poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0), // No min BPT out: first join.
+                fromInternalBalance: false
+            })
+        );
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: poolId,
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(pt),
+                assetOut: address(asset),
+                amount: eqPTReserves.mulDivDown(balances[1 - pti], targetBal),
+                userData: hex""
+            })
+        );
+
+        balances[pti    ] = pt.balanceOf(address(this));
+        balances[1 - pti] = asset.balanceOf(address(this));
+
+        _joinPool(
+            poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0), // No min BPT out: the pool was created in this tx and the join can't be sandwiched.
+                fromInternalBalance: false
+            })
+        );
+    }
+
     /// @notice Settle the active Series if the roll window isn't open but the Series has reacted maturity.
     /// @dev Calling this function cashes the current LP shares in for Target and initiates a cooldown phase.
     function settle() public {
@@ -167,163 +275,19 @@ contract AutoRoller is ERC4626, Trust {
 
         maturity = MATURITY_NOT_SET; // Enter a cooldown phase where users can redeem without slippage.
         delete pt; delete yt; delete space; delete pti; delete poolId; delete initScale; // Re-set defaults.
-
-        // cash?
     }
 
-    function cash() public {
-        // inflate supply
-        // queue pts or yts up for redemption
-    }
+    /// @notice Cash a previous Series' assets into Target
+    function cashSeries(uint256 prevMaturity) public {
+        uint256 _cash = cash[prevMaturity];
 
-    event A(uint);
-
-    function roll() external {
-        if (lastRoll != 0 || lastRoll + rollDistance > block.timestamp) revert RollWindowNotOpen();
-
-        // (uint256 year,  uint256 month,  ) = DateTime.timestampToDate(lastRoll + gap);
-        // (uint256 year1, uint256 month1, ) = DateTime.timestampToDate(block.timestamp); // is the rounding ok here?
-
-        // DateTime.addMonths(block.timestamp, targetDuration);
-
-        // if (month1 - month < gap) revert RollWindowNotOpen(); // FIXME
-        if (block.timestamp > maturity) {
-            settle();
-        }
-
-        // if (maturity != MATURITY_NOT_SET) {
-        //     (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
-
-        //     uint256 maxPTSale = maxPTSell();
-        //     if (isExcessPTs) {
-
-        //     } else {
-
-        //     }
-        // }
-
-        adapter.openSponsorWindow();
-
-        // uint32 timestamp = block.timestamp.safeCastTo32();
-
-        // Combined single SSTORE
-        // lastRewardAmount = 
-        // nextRewards.safeCastTo192();
-        // lastRoll = timestamp;
-        // rewardsCycleEnd = end;
-
-
-    } function onSponsorWindowOpened() external {
-        // Assumption: this contract will never have uncashed LP shares by the time this function is called
-
-        if (msg.sender != address(adapter)) revert OnlyAdapter();
-
-
-        (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, targetDuration));
-
-        uint256 nextMaturity = DateTime.timestampFromDateTime(
-            year,
-            month,
-            1, // top of month only
-            0,
-            0,
-            0
-        );
-
-        // TODO: do we need stake? do we need initial target to roll?
-        // pay the caller some small fee (privledged role or mev?)
-
-        uint256 targetedRate;
-
-        (, , , , , , uint256 sampleTs) = space.getSample(space.getTotalSamples() - 1);
-        if (sampleTs > 0) {
-            BalancerOracle.OracleAverageQuery[] memory queries = new BalancerOracle.OracleAverageQuery[](1);
-            queries[0] = BalancerOracle.OracleAverageQuery({
-                variable: BalancerOracle.Variable.BPT_PRICE, // For Space, the BPT_PRICE slot contains the stretched implied rate.
-                secs: space.getLargestSafeQueryWindow() - 1 hours,
-                ago: 1 hours
-            });
-            uint256[] memory results = space.getTimeWeightedAverage(queries);
-            targetedRate = _powWad(results[0] + ONE, space.ts().mulWadDown(SECONDS_PER_YEAR * ONE)) - ONE;
+        ERC20 pt = ERC20(divider.pt(address(adapter), prevMaturity));
+        if (pt.balanceOf(address(this)) > 0) {
+            divider.redeem(address(adapter), prevMaturity, _cash);
         } else {
-            targetedRate = fallbackRate;
+            YT yt = YT(divider.yt(address(adapter), prevMaturity));
+            yt.collect();
         }
-
-        // Assign Series data.
-        (pt, yt)  = periphery.sponsorSeries(address(adapter), nextMaturity, true);
-        space     = spaceFactory.pools(address(adapter), nextMaturity);
-        pti       = space.pti();
-        poolId    = space.getPoolId();
-        maturity  = nextMaturity;
-        initScale = adapter.scale();
-
-        // Allow Balancer to move the new PTs for Space pools joins & swaps.
-        pt.approve(address(balancerVault), type(uint256).max);
-
-        // Allow Periphery to move the new YTs for swaps.
-        yt.approve(address(periphery), type(uint256).max);
-
-        ERC20[] memory tokens = new ERC20[](2);
-        tokens[pti]      = pt;
-        tokens[1 - pti]  = asset; // todo: make mem load rather than sload
-
-        uint256 scale    = adapter.scale();
-        uint256 targetBal = asset.balanceOf(address(this));
-
-        (uint256 eqPTReserves, uint256 eqTargetReserves) = _getEQReserves(
-            fallbackRate,
-            nextMaturity,
-            0,
-            targetBal,
-            targetBal.mulWadDown(scale),
-            scale
-        );
-
-        divider.issue(address(adapter), nextMaturity, _getTargetForIssuance(
-            eqPTReserves, eqTargetReserves, targetBal, scale
-        ));
-
-        uint256[] memory balances = new uint256[](2);
-        balances[1 - pti] = targetBal / 100;
-
-        _joinPool(
-            poolId,
-            BalancerVault.JoinPoolRequest({
-                assets: tokens,
-                maxAmountsIn: balances,
-                userData: abi.encode(balances, 0), // No min BPT out: first join.
-                fromInternalBalance: false
-            })
-        );
-
-        _swap(
-            BalancerVault.SingleSwap({
-                poolId: poolId,
-                kind: BalancerVault.SwapKind.GIVEN_IN,
-                assetIn: address(pt),
-                assetOut: address(asset),
-                amount: eqPTReserves / 100,
-                userData: hex""
-            })
-        );
-
-        balances[pti    ] = pt.balanceOf(address(this));
-        balances[1 - pti] = asset.balanceOf(address(this));
-
-        _joinPool(
-            poolId,
-            BalancerVault.JoinPoolRequest({
-                assets: tokens,
-                maxAmountsIn: balances,
-                userData: abi.encode(balances, 0), // No min BPT out: the pool was created in this tx and the join can't be sandwiched.
-                fromInternalBalance: false
-            })
-        );
-
-        emit A(pt.balanceOf(address(this)));
-        emit A(asset.balanceOf(address(this)));
-
-        // not enough target to initialize?
     }
 
     /* ========== 4626 OVERRIDES ========== */
@@ -360,10 +324,10 @@ contract AutoRoller is ERC4626, Trust {
 
             (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
 
-            uint256 previewedLPShares = supply - shares == 0 ?
+            uint256 previewedLPBal = supply - shares == 0 ?
                 shares.mulDivDown(space.balanceOf(address(this)), supply - shares) : shares;
 
-            uint256 targetToJoin = previewedLPShares.mulDivDown(balances[1 - pti], space.totalSupply());
+            uint256 targetToJoin = previewedLPBal.mulDivDown(balances[1 - pti], space.totalSupply());
 
             balances[1 - pti] = targetToJoin;
             if (assets - targetToJoin > 0) { // Assumption: this will only be false if Space has only Target liquidity.
@@ -375,7 +339,7 @@ contract AutoRoller is ERC4626, Trust {
                 BalancerVault.JoinPoolRequest({
                     assets: tokens,
                     maxAmountsIn: balances,
-                    userData: abi.encode(balances, 0), // TODO: min bpt out
+                    userData: abi.encode(balances, 0),
                     fromInternalBalance: false
                 })
             );
@@ -387,8 +351,6 @@ contract AutoRoller is ERC4626, Trust {
         if (maturity == MATURITY_NOT_SET) {
             return asset.balanceOf(address(this));
         } else {
-            // upscale reserves?
-
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
             
             (uint256 targetBal, uint256 ptBal, uint256 ytBal) = _decomposeShares(ptReserves, targetReserves, totalSupply);
@@ -424,17 +386,17 @@ contract AutoRoller is ERC4626, Trust {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewDeposit(assets);
         } else {
-            (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
             uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
 
             // Calculate how much Target we'll end up joining the pool with, and use that to preview minted LP shares.
-            uint256 previewedLPShares = (assets - _getTargetForIssuance(balances[pti], balances[1 - pti], assets, adapter.scaleStored()))
-                .mulDivDown(space.totalSupply(), balances[1 - pti]);
+            uint256 previewedLPBal = (assets - _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored()))
+                .mulDivDown(space.totalSupply(), targetReserves);
 
             // Shares represent proportional ownership of the LP shares the vault holds.
             return supply == 0 ? 
-                previewedLPShares : previewedLPShares.mulDivDown(supply, space.balanceOf(address(this)));
+                previewedLPBal : previewedLPBal.mulDivDown(supply, space.balanceOf(address(this)));
         }
     }
 
@@ -447,36 +409,10 @@ contract AutoRoller is ERC4626, Trust {
             (uint256 targetToJoin, uint256 ptsToJoin, ) = _decomposeShares(ptReserves, targetReserves, shares);
 
             uint256 targetToIssue = ptsToJoin.divWadDown(
-                Adapter(adapter).scaleStored().mulWadDown(1e18 - ifee)
+                adapter.scaleStored().mulWadDown(1e18 - ifee)
             );
 
             return targetToJoin + targetToIssue;
-        }
-    }
-
-    function previewWithdraw(uint256 assets) public view override returns (uint256) {
-        if (maturity == MATURITY_NOT_SET) {
-            return super.previewWithdraw(assets);
-        } else {
-            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-
-            uint256 lpShares = space.balanceOf(address(this));
-            uint256 pctPool = lpShares.divWadDown(space.totalSupply());
-
-            uint256 ptBal = pctPool.mulWadDown(ptReserves);
-            uint256 ytBal = yt.balanceOf(address(this));
-
-            if (ptBal >= ytBal) {
-                uint256 diff = ptBal - ytBal;
-                uint256 hole = diff.divWadDown(lpShares);
-
-                // uint256 adjPTReserves
-
-
-                // y = 1.2x + 1.4x + 0.5x * nonsense
-            } else {
-
-            }
         }
     }
 
@@ -504,7 +440,7 @@ contract AutoRoller is ERC4626, Trust {
                         diff = maxPTSale;
                     }
 
-                    // Target + combined PTs/YTs .
+                    // Target + combined PTs/YTs + sold PTs.
                     return targetBal + ptBal.divWadDown(scale) + _previewSell(
                         ptReserves - ptBal, targetReserves - targetBal, diff, true, true
                     );
@@ -518,11 +454,11 @@ contract AutoRoller is ERC4626, Trust {
                         diff = ptReserves;
                     }
 
-                    (uint256 targetIn) = _previewSell(
+                    uint256 targetIn = _previewSell(
                         ptReserves - ptBal, targetReserves - targetBal, diff, true, false
                     );
 
-                    // Target + combined PTs/YTs .
+                    // Target + combined PTs/YTs + sold YTs.
                     return targetBal + ytBal.divWadDown(scale) + diff.divWadDown(scale) - targetIn;
                 }
             }
@@ -543,13 +479,13 @@ contract AutoRoller is ERC4626, Trust {
         } else {
             uint256 shares = balanceOf[owner];
 
-            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+            (uint256 ptReserves, ) = _getSpaceReserves();
 
-            uint256 spaceSupply = space.totalSupply();
+            uint256 supply = totalSupply;
 
-            uint256 lpShares = shares.mulDivDown(space.balanceOf(address(this)), totalSupply);
-            uint256 ptBal    = lpShares.mulDivDown(ptReserves, spaceSupply);
-            uint256 ytBal    = yt.balanceOf(address(this));
+            uint256 lpBal = shares.mulDivDown(space.balanceOf(address(this)), supply);
+            uint256 ptBal = lpBal.mulDivDown(ptReserves, space.totalSupply());
+            uint256 ytBal = yt.balanceOf(address(this));
 
             if (ptBal >= ytBal) {
                 uint256 diff = ptBal - ytBal;
@@ -561,10 +497,10 @@ contract AutoRoller is ERC4626, Trust {
                     return shares;
                 } else {
                     // For every unit of LP Share, the excess PT balance grows by "hole".
-                    uint256 hole = diff.divWadDown(lpShares);
+                    uint256 hole = diff.divWadDown(lpBal);
 
                     // Determine how many shares we can redeem without exceeding sell limits.
-                    return maxPTSale.divWadDown(hole).mulDivDown(totalSupply, space.balanceOf(address(this)));
+                    return maxPTSale.divWadDown(hole).mulDivDown(supply, space.balanceOf(address(this)));
                 }
             } else {
                 uint256 diff = ytBal - ptBal;
@@ -573,12 +509,10 @@ contract AutoRoller is ERC4626, Trust {
                     return shares;
                 } else {
                     // For every unit of LP Share, the excess YT balance grows by "hole".
-                    uint256 hole = diff.divWadDown(lpShares);
-
-                    // todo: should we add a little buffer to max pt reserves for rounding?
+                    uint256 hole = diff.divWadDown(lpBal);
 
                     // Determine how many shares we can redeem without exceeding sell limits.
-                    return ptReserves.divWadDown(hole).mulDivDown(totalSupply, space.balanceOf(address(this)));
+                    return ptReserves.divWadDown(hole).mulDivDown(supply, space.balanceOf(address(this)));
                 }
             }
         }
@@ -601,9 +535,9 @@ contract AutoRoller is ERC4626, Trust {
             if (allowed != type(uint256).max) allowance[owner][msg.sender] = allowed - shares;
         }
 
-        _burn(owner, shares);
-
         (excessBal, isExcessPTs) = _exitAndCombine(shares);
+
+        _burn(owner, shares); // Burn after relative ownership is determined in _exitAndCombine.
 
         if (isExcessPTs) {
             pt.transfer(receiver, excessBal);
@@ -618,9 +552,7 @@ contract AutoRoller is ERC4626, Trust {
         );
     }
 
-    function maxPTSell() public view returns (uint256) { // Assumption: this function will never be called during a cooldown phase.
-        // edge case the pool is already at the max rate
-
+    function maxPTSell() public view returns (uint256) {
         (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
         (uint256 eqPTReserves, ) = _getEQReserves(
@@ -632,37 +564,32 @@ contract AutoRoller is ERC4626, Trust {
             initScale
         );
 
-        return eqPTReserves - ptReserves;
+        return ptReserves >= eqPTReserves ? 0 : eqPTReserves - ptReserves;
     }
 
     /* ========== INTERNAL HELPERS ========== */
 
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
         uint256 supply = totalSupply;
-        uint256 lpShares = shares.mulDivUp(space.balanceOf(address(this)), supply);
+
+        uint256 lpBal = shares.mulDivDown(space.balanceOf(address(this)), supply);
 
         ERC20[] memory tokens = new ERC20[](2);
         tokens[pti] = pt; tokens[1 - pti] = asset;
-
-        uint256[] memory minAmountsOut = new uint256[](2); // TODO
 
         _exitPool(
             poolId,
             BalancerVault.ExitPoolRequest({
                 assets: tokens,
-                minAmountsOut: minAmountsOut,
-                userData: abi.encode(lpShares),
+                minAmountsOut: new uint256[](2),
+                userData: abi.encode(lpBal),
                 toInternalBalance: false
             })
         );
 
         uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
         uint256 ptBal = pt.balanceOf(address(this));
-        emit A(ytBal);
-        emit A(yt.balanceOf(address(this)));
-        emit A(shares);
-        emit A(supply);
-        emit A(ptBal);
+
         unchecked {
             if (ptBal >= ytBal) {
                 return (ptBal - ytBal, true);
@@ -704,7 +631,7 @@ contract AutoRoller is ERC4626, Trust {
         );
     }
 
-    /// @notice Given initial conditions, determine the reserve balances required to establish the given implied rate.
+    /// @dev Given initial Space conditions, determine the reserve balances required to establish the implied rate.
     function _getEQReserves(
         uint256 rate,
         uint256 maturity,
@@ -715,9 +642,9 @@ contract AutoRoller is ERC4626, Trust {
     ) internal view returns (uint256, uint256) {
         // Stretch the targeted rate to match the Space pool's timeshift period.
         // e.g. if the timestretch is 1/12 years in seconds, then the rate will be transformed from a yearly rate to a 12-year rate.
-        uint256 stretchedRate = _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE; // TODO: should we cache this?
+        uint256 stretchedRate = _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE;
 
-        // Selling PTs
+        // Assumption: the swap to get to these reserves will be PTs -> Target, so we use the G2 fee.
         uint256 a = ONE - space.g2().mulWadDown(space.ts().mulWadDown((maturity - block.timestamp) * ONE));
         uint256 k = _powWad(initialPTReserves + poolSupply, a) + _powWad(initialTargetReserves.mulWadDown(initScale), a);
         uint256 eqPTReservesPartial = _powWad(
@@ -733,14 +660,15 @@ contract AutoRoller is ERC4626, Trust {
         return (balances[pti], balances[1 - pti]);
     }
 
+    /// @dev Decompose shares works to break shares into their constituent parts, 
+    ///      and also preview the assets required to mint a given number of shares.
     function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares) 
         internal view returns (uint256, uint256, uint256)
     {
         uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply isn't equal to shares.
 
-        uint256 percentOwnership = (
-            supply == shares ? space.balanceOf(address(this)) : 
-                shares.mulDivDown(space.balanceOf(address(this)), supply)
+        uint256 percentOwnership = (supply == shares ? space.balanceOf(address(this)) : 
+                shares.mulDivUp(space.balanceOf(address(this)), supply)
             ).divWadDown(space.totalSupply());
 
         return (percentOwnership.mulWadUp(targetReserves), percentOwnership.mulWadUp(ptReserves), yt.balanceOf(address(this)));
@@ -771,7 +699,7 @@ contract AutoRoller is ERC4626, Trust {
             toInternalBalance: false
         });
 
-        balancerVault.swap(request, funds, 0, type(uint256).max); // todo: min accepted
+        balancerVault.swap(request, funds, 0, type(uint256).max);
     }
 
     /* ========== ADMIN ========== */
@@ -781,31 +709,39 @@ contract AutoRoller is ERC4626, Trust {
         spaceFactory = SpaceFactoryLike(newSpaceFactory);
     }
 
-
-    function setGap(uint8 newGap) external requiresTrust {
-        emit GapChanged(gap, newGap);
-        gap = newGap;
+    function setPeriphery(address newPeriphery) external requiresTrust {
+        emit PeripheryChanged(address(periphery), newPeriphery);
+        periphery = PeripheryLike(newPeriphery);
     }
 
-    function setWait(uint8 newGap) external requiresTrust {
-        emit GapChanged(gap, newGap);
-        gap = newGap;
+    function setMaxRate(uint256 newMaxRate) external requiresTrust {
+        emit MaxRateChanged(maxRate, newMaxRate);
+        maxRate = newMaxRate;
     }
 
-    function setFallbackRate(uint8 newGap) external requiresTrust {
-        emit GapChanged(gap, newGap);
-        gap = newGap;
+    function setFallbackRate(uint256 newFallbackRate) external requiresTrust {
+        emit FallbackRateChanged(fallbackRate, newFallbackRate);
+        fallbackRate = newFallbackRate;
     }
 
-    // set periphery
-    // params for target series
-    // lock/end contract
-    // roller role
+    function setTargetDuration(uint256 newTargetDuration) external requiresTrust {
+        emit TargetDurationChanged(targetDuration, newTargetDuration);
+        targetDuration = newTargetDuration;
+    }
+
+    function setRollDistance(uint256 newRollDistance) external requiresTrust {
+        emit RollDistanceChanged(rollDistance, newRollDistance);
+        rollDistance = newRollDistance;
+    }
 
     /* ========== EVENTS ========== */
 
     event SpaceFactoryChanged(address oldSpaceFactory, address newSpaceFactory);
-    event GapChanged(uint256 oldGap, uint256 newGap);
+    event PeripheryChanged(address oldPeriphery, address newPeriphery);
+    event MaxRateChanged(uint256 oldMaxRate, uint256 newMaxRate);
+    event FallbackRateChanged(uint256 oldFallbackRate, uint256 newFallbackRate);
+    event TargetDurationChanged(uint256 oldTargetDuration, uint256 newTargetDuration);
+    event RollDistanceChanged(uint256 oldRollDistance, uint256 newRollDistance);
     event Ejected(
         address indexed caller,
         address indexed receiver,

@@ -64,9 +64,12 @@ interface Space {
     ) 
     external 
     view // This is a lie. But it indeed will only mutate storage if called by the Balancer Vault, so it's true for our purposes here.
-    returns (uint256 amount);
+    returns (uint256);
 
     function getIndices() external view returns (uint256 pti, uint256 targeti);
     function balanceOf(address user) external view returns (uint256 amount);
     function getPriceFromImpliedRate(uint256 impliedRate) external view returns (uint256 pTPriceInTarget);
+    
+    function getTotalSamples() external view returns (uint256);
+    function getLargestSafeQueryWindow() external view returns (uint256);
 }
