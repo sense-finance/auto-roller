@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity 0.8.11;
 
+import { ERC20 } from "solmate/tokens/ERC20.sol";
+
 interface BalancerVault {
     struct JoinPoolRequest {
-        address[] assets;
+        ERC20[] assets;
         uint256[] maxAmountsIn;
         bytes userData;
         bool fromInternalBalance;
     }
     struct ExitPoolRequest {
-        address[] assets;
+        ERC20[] assets;
         uint256[] minAmountsOut;
         bytes userData;
         bool toInternalBalance;
@@ -42,7 +44,7 @@ interface BalancerVault {
         external
         view
         returns (
-            address[] memory tokens,
+            ERC20[] memory tokens,
             uint256[] memory balances,
             uint256 maxBlockNumber
         );

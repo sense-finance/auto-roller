@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity 0.8.11;
 
+import { ERC20 } from "solmate/tokens/ERC20.sol";
+
 import { BalancerVault } from "./BalancerVault.sol";
 
 interface Space {
@@ -37,11 +39,15 @@ interface Space {
     function getVault() external view returns (address);
     function totalSupply() external view returns (uint256);
     function pti() external view returns (uint256);
+    function ts() external view returns (uint256);
+    function g1() external view returns (uint256);
+    function g2() external view returns (uint256);
+    function maturity() external view returns (uint256);
     
     struct SwapRequest {
         BalancerVault.SwapKind kind;
-        address tokenIn;
-        address tokenOut;
+        ERC20 tokenIn;
+        ERC20 tokenOut;
         uint256 amount;
         // Misc data
         bytes32 poolId;
@@ -55,7 +61,12 @@ interface Space {
         SwapRequest memory swapRequest,
         uint256 currentBalanceTokenIn,
         uint256 currentBalanceTokenOut
-    ) external returns (uint256 amount);
+    ) 
+    external 
+    view // This is a lie. But it indeed will only mutate storage if called by the Balancer Vault, so it's true for our purposes here.
+    returns (uint256 amount);
 
     function getIndices() external view returns (uint256 pti, uint256 targeti);
+    function balanceOf(address user) external view returns (uint256 amount);
+    function getPriceFromImpliedRate(uint256 impliedRate) external view returns (uint256 pTPriceInTarget);
 }

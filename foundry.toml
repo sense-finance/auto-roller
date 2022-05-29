@@ -1,20 +1,17 @@
 [default]
 src = 'src'
 out = 'out'
+test = 'src/test'
 libs = ['lib', 'lib/space-v1/lib/','lib/sense-v1/node_modules/']
 verbosity = 3
-eth-rpc-url = "https://eth-mainnet.alchemyapi.io/v2/q13IQLf_TGiCQ4BuqQfdupzbe7bBuf2x"
-# Block mined at Fri Apr 08 2022 12:52:05 GMT-0400 (GMT-04:00)
-fork_block_number = 14546317
+eth-rpc-url = "https://eth-mainnet.alchemyapi.io/v2/JrCVyH87AyAZaGXaIaxhWce4x-JqR7z-"
+# Block mined at Fri May 24 2022 06:30:37 +UTC
+fork_block_number = 14837243
 remappings = [
     'ds-test/=lib/ds-test/src/',
     'sense-v1-core/=lib/sense-v1/pkg/core/src/',
     'sense-v1-utils/=lib/sense-v1/pkg/utils/src/',
     '@rari-capital/=lib/sense-v1/node_modules/@rari-capital/',
     '@openzeppelin/contracts=lib/sense-v1/node_modules/@openzeppelin/contracts',
-    '@sense-finance/=lib/sense-v1/node_modules/@sense-finance/',
-    # '@balancer-labs/v2-solidity-utils/=lib/space-v1/lib/balancer-v2-monorepo/pkg/solidity-utils/',
-    # '@balancer-labs/v2-pool-utils/=lib/space-v1/lib/balancer-v2-monorepo/pkg/pool-utils/',
-    # '@balancer-labs/v2-vault/=lib/space-v1/lib/balancer-v2-monorepo/pkg/vault/'
-    # '@balancer-labs/=lib/space-v1/lib/balancer-v1-monorepo/',
+    '@sense-finance/=lib/sense-v1/node_modules/@sense-finance/'
 ]

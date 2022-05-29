@@ -5,22 +5,29 @@ import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
+import { DateTime } from "./external/DateTime.sol";
 
 import { Divider } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
 import { BaseAdapter as Adapter } from "sense-v1-core/adapters/BaseAdapter.sol";
-import { DateTimeFull } from "sense-v1-core/tests/test-helpers/DateTimeFull.sol";
+import { YT } from "sense-v1-core/tokens/YT.sol";
 import { Trust } from "sense-v1-utils/Trust.sol";
 
+import { BalancerOracle } from "./interfaces/BalancerOracle.sol";
 import { BalancerVault } from "./interfaces/BalancerVault.sol";
 import { Space } from "./interfaces/Space.sol";
-
-import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 
 interface SpaceFactoryLike {
     function divider() external view returns (address);
     function create(address, uint256) external returns (address);
-    function pools(address, uint256) external view returns (address);
+    function pools(address, uint256) external view returns (Space);
+}
+
+interface PeripheryLike {
+    function sponsorSeries(address, uint256, bool) external returns (ERC20, YT);
+    function swapYTsForTarget(address, uint256, uint256) external returns (uint256);
+    function create(address, uint256) external returns (address);
+    function pools(address, uint256) external view returns (Space);
 }
 
 interface Opener {
@@ -33,144 +40,779 @@ abstract contract OwnableAdapter is Adapter {
     }
 }
 
+// options for dust:
+// 1. don't allow ppl to leave dust
+// 2. claims for the next roll
+// 3. give back pts
+// 4. have the roller leave some capital in
+// 5. grounded pt price
+
+// Ribbon-style keep 20% liquid for insta withdrawals?
+
+// two phases for this contract:
+// * target only
+// * lp shares and yts
+// tween interpolation between rates
+
+// can exit size into target for a bad price
+
 // could we do this with an x4626-like contract?
 contract AutoRoller is ERC4626, Trust {
-    using FixedPointMathLib for uint256;
+    // using SafeCastLib for *;
     using SafeTransferLib for ERC20;
+    using FixedPointMathLib for uint256;
+    using FixedPointMathLib for int256;
 
-    OwnableAdapter public adapter;
+    /* ========== ERRORS ========== */
+
+    error ActivePhaseOnly();
+    error SeriesCannotBeActive();
+    error InsufficientLiquidity();
+    error RollWindowNotOpen();
+    error OnlyAdapter();
+
+    /* ========== CONSTANTS ========== */
+
+    uint256 public constant MATURITY_NOT_SET = type(uint256).max;
+    uint256 public constant SECONDS_PER_YEAR = 31536000;
+    uint256 public constant ONE = 1e18;
+
+    /* ========== IMMUTABLES ========== */
+
+    Divider          public immutable divider;
+    BalancerVault    public immutable balancerVault;
+    OwnableAdapter   public immutable adapter;
+    uint256          public immutable ifee;
+
+    /* ========== MUTABLE STORAGE ========== */
+
+    PeripheryLike    public periphery;
     SpaceFactoryLike public spaceFactory;
-    Periphery public periphery;
-    Divider public divider;
-    ERC20 public target;
-
-    
-    uint256 public beforeWithdrawHookCalledCounter = 0;
-    uint256 public afterDepositHookCalledCounter = 0;
 
     // Active Series
-    address public yt;
-    address public pt;
-    address public space;
+    YT      public yt;
+    ERC20   public pt;
+    Space   public space;
+    uint256 public pti;
+    bytes32 public poolId;
+    uint256 public initScale;
+    uint256 public maturity = MATURITY_NOT_SET;
+    // TODO should this be a struct that can be deleted?
 
     // Months between series
-    uint8 public gap;
+    uint8 public gap = 3;
 
-    uint256 public nextMaturity;
+    // Months between series
+    uint256 public maxRate = 2e18;
+    uint256 public fallbackRate = 0.12e18;
+
+    uint256 targetDuration = 3;
+    uint256 rollDistance = 30 days;
+
+    uint32 public lastRoll;
+    uint32 public rewardsCycleEnd;
+    uint192 public lastRewardAmount;
 
     constructor(
         ERC20 _target,
         Divider _divider,
-        address _spaceFactory,
         address _periphery,
-        string memory _name,
-        string memory _symbol
-    ) ERC4626(_target, _name, _symbol) Trust(msg.sender) {
-        // adapter
-        spaceFactory = SpaceFactoryLike(_spaceFactory);
-        periphery = Periphery(_periphery);
-        gap = 3;
-        target = _target;
-        divider = _divider;
+        address _spaceFactory,
+        address _balancerVault,
+        OwnableAdapter _adapter
+    ) ERC4626(
+        _target,
+        string(abi.encodePacked(_target.name(), " Sense Auto Roller")),
+        string(abi.encodePacked(_target.symbol(), "-sAR"))
+    ) Trust(msg.sender) {
+        divider       = _divider;
+        periphery     = PeripheryLike(_periphery);
+        spaceFactory  = SpaceFactoryLike(_spaceFactory);
+        balancerVault = BalancerVault(_balancerVault);
 
-        target.approve(address(divider), type(uint256).max);
-    }
+        // Allow the Divder to move this contract's Target for PT/YT issuance.
+        _target.approve(address(_divider), type(uint256).max);
 
-    function init(OwnableAdapter _adapter) public {
+        // Allow Balancer to move this contract's Target for Space pools joins.
+        _target.approve(address(_balancerVault), type(uint256).max);
+
+        // Prevent transfers to this contract and 0x00.
+        balanceOf[address(this)] = type(uint256).max;
+        balanceOf[address(0)   ] = type(uint256).max;
+
         adapter = _adapter;
+        ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
     }
 
-    function roll() public {
+    /// @notice Settle the active Series if the roll window isn't open but the Series has reacted maturity.
+    /// @dev Calling this function cashes the current LP shares in for Target and initiates a cooldown phase.
+    function settle() public {
+        uint256 assetBalPre = asset.balanceOf(address(this));
+        divider.settleSeries(address(adapter), maturity); // Settlement will fail if maturity hasn't been reached.
+        uint256 assetBalPost = asset.balanceOf(address(this));
+
+        asset.safeTransfer(msg.sender, assetBalPost - assetBalPre); // Send settlement reward to the sender.
+
+        (, address stake, uint256 stakeSize) = Adapter(adapter).getStakeAndTarget();
+
+        if (stake != address(asset)) {
+            ERC20(stake).safeTransfer(msg.sender, stakeSize);
+        }
+
+        (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply); // Collects & burns YTs as a side-effect.
+
+        if (excessBal > 0 && isExcessPTs) {
+            divider.redeem(address(adapter), maturity, excessBal);
+        }
+
+        maturity = MATURITY_NOT_SET; // Enter a cooldown phase where users can redeem without slippage.
+        delete pt; delete yt; delete space; delete pti; delete poolId; delete initScale; // Re-set defaults.
+
+        // cash?
+    }
+
+    function cash() public {
+        // inflate supply
+        // queue pts or yts up for redemption
+    }
+
+    event A(uint);
+
+    function roll() external {
+        if (lastRoll != 0 || lastRoll + rollDistance > block.timestamp) revert RollWindowNotOpen();
+
+        // (uint256 year,  uint256 month,  ) = DateTime.timestampToDate(lastRoll + gap);
+        // (uint256 year1, uint256 month1, ) = DateTime.timestampToDate(block.timestamp); // is the rounding ok here?
+
+        // DateTime.addMonths(block.timestamp, targetDuration);
+
+        // if (month1 - month < gap) revert RollWindowNotOpen(); // FIXME
+        if (block.timestamp > maturity) {
+            settle();
+        }
+
+        // if (maturity != MATURITY_NOT_SET) {
+        //     (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
+
+        //     uint256 maxPTSale = maxPTSell();
+        //     if (isExcessPTs) {
+
+        //     } else {
+
+        //     }
+        // }
+
         adapter.openSponsorWindow();
 
-        // take TWAR from space pool and initialize a price on the new space pool
-        // pay the caller some small fee (privledged role or mev?)
-    }
-    // Adapter callback
-    function onSponsorWindowOpened() public {
+        // uint32 timestamp = block.timestamp.safeCastTo32();
 
-        // pay the caller some small fee (privledged role or mev?)
+        // Combined single SSTORE
+        // lastRewardAmount = 
+        // nextRewards.safeCastTo192();
+        // lastRoll = timestamp;
+        // rewardsCycleEnd = end;
 
-        // withdraw, redeem
 
-        // uint256 nextMaturity = now + 1;
+    } function onSponsorWindowOpened() external {
+        // Assumption: this contract will never have uncashed LP shares by the time this function is called
 
-        // get twar
-        // * if twar unavailable, use fallback implied rate
+        if (msg.sender != address(adapter)) revert OnlyAdapter();
 
-        (uint256 year, uint256 month, ) = DateTimeFull.timestampToDate(block.timestamp);
-        uint256 monthToSponsor = month + gap;
 
-        uint256 nextSeriesMaturity = DateTimeFull.timestampFromDateTime(
-            monthToSponsor >= 12 ? year + 1 : year, // assumes monthToSponsor is always 12 or less
-            monthToSponsor >= 12 ? monthToSponsor - 11 : monthToSponsor,
-            1,
+        (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, targetDuration));
+
+        uint256 nextMaturity = DateTime.timestampFromDateTime(
+            year,
+            month,
+            1, // top of month only
             0,
             0,
             0
         );
-        (uint256 minm, uint256 maxm) = adapter.getMaturityBounds();
 
-        (, , uint256 day, uint256 hour, uint256 minute, uint256 second) = DateTimeFull.timestampToDateTime(nextSeriesMaturity);
+        // TODO: do we need stake? do we need initial target to roll?
+        // pay the caller some small fee (privledged role or mev?)
 
-        // Get token balances
+        uint256 targetedRate;
 
-        // assume that we can swap the pts out for target
-
-        // Sponsor the new Series
-        (pt, yt) = periphery.sponsorSeries(address(adapter), nextSeriesMaturity, true);
-        space = spaceFactory.pools(address(adapter), nextSeriesMaturity);
-
-        uint256 targetBal = target.balanceOf(address(this));
-
-        // Issue PTs
-        // targetBal
-        // fair reserves calc given the target balance and 
-        divider.issue(address(adapter), nextSeriesMaturity, targetBal);
-
-
-    }
-
-    // should we keep 80% in the pool or something?
-
-
-
-    function totalAssets() public view override returns (uint256) {
-        // lp shares -> target and pt shares -> target
-
-        return asset.balanceOf(address(this));
-    }
-
-    function beforeWithdraw(uint256, uint256) internal override {
-        beforeWithdrawHookCalledCounter++;
-
-        // Pull the liqudity from the pool, sell pts (or combine with yts), then give back the liquidity
-        // need amm equations here for the preview & total assets functions, don't we
-    }
-
-    function afterDeposit(uint256 assets, uint256) internal override {
-        // What if the adapter is the zero address?
-        if (nextMaturity == 0) {
-            revert("UNINITIALIZED");
+        (, , , , , , uint256 sampleTs) = space.getSample(space.getTotalSamples() - 1);
+        if (sampleTs > 0) {
+            BalancerOracle.OracleAverageQuery[] memory queries = new BalancerOracle.OracleAverageQuery[](1);
+            queries[0] = BalancerOracle.OracleAverageQuery({
+                variable: BalancerOracle.Variable.BPT_PRICE, // For Space, the BPT_PRICE slot contains the stretched implied rate.
+                secs: space.getLargestSafeQueryWindow() - 1 hours,
+                ago: 1 hours
+            });
+            uint256[] memory results = space.getTimeWeightedAverage(queries);
+            targetedRate = _powWad(results[0] + ONE, space.ts().mulWadDown(SECONDS_PER_YEAR * ONE)) - ONE;
+        } else {
+            targetedRate = fallbackRate;
         }
 
-        // we have Target here, then we put it into the current series space pool
-        // are we ok with the downward pressure on the rate from a single-sided target liquidity add?
+        // Assign Series data.
+        (pt, yt)  = periphery.sponsorSeries(address(adapter), nextMaturity, true);
+        space     = spaceFactory.pools(address(adapter), nextMaturity);
+        pti       = space.pti();
+        poolId    = space.getPoolId();
+        maturity  = nextMaturity;
+        initScale = adapter.scale();
+
+        // Allow Balancer to move the new PTs for Space pools joins & swaps.
+        pt.approve(address(balancerVault), type(uint256).max);
+
+        // Allow Periphery to move the new YTs for swaps.
+        yt.approve(address(periphery), type(uint256).max);
+
+        ERC20[] memory tokens = new ERC20[](2);
+        tokens[pti]      = pt;
+        tokens[1 - pti]  = asset; // todo: make mem load rather than sload
+
+        uint256 scale    = adapter.scale();
+        uint256 targetBal = asset.balanceOf(address(this));
+
+        (uint256 eqPTReserves, uint256 eqTargetReserves) = _getEQReserves(
+            fallbackRate,
+            nextMaturity,
+            0,
+            targetBal,
+            targetBal.mulWadDown(scale),
+            scale
+        );
+
+        divider.issue(address(adapter), nextMaturity, _getTargetForIssuance(
+            eqPTReserves, eqTargetReserves, targetBal, scale
+        ));
+
+        uint256[] memory balances = new uint256[](2);
+        balances[1 - pti] = targetBal / 100;
+
+        _joinPool(
+            poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0), // No min BPT out: first join.
+                fromInternalBalance: false
+            })
+        );
+
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: poolId,
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(pt),
+                assetOut: address(asset),
+                amount: eqPTReserves / 100,
+                userData: hex""
+            })
+        );
+
+        balances[pti    ] = pt.balanceOf(address(this));
+        balances[1 - pti] = asset.balanceOf(address(this));
+
+        _joinPool(
+            poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0), // No min BPT out: the pool was created in this tx and the join can't be sandwiched.
+                fromInternalBalance: false
+            })
+        );
+
+        emit A(pt.balanceOf(address(this)));
+        emit A(asset.balanceOf(address(this)));
+
+        // not enough target to initialize?
     }
 
-    /// @notice Update the address for the Space Factory
-    /// @param newSpaceFactory The Space Factory addresss to set
+    /* ========== 4626 OVERRIDES ========== */
+
+    function beforeWithdraw(uint256, uint256 shares) internal override {
+        if (maturity != MATURITY_NOT_SET) {
+
+            (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(shares);
+
+            if (isExcessPTs) {
+                uint256 maxPTSale = maxPTSell();
+
+                if (excessBal > maxPTSale) revert InsufficientLiquidity(); // Need to wait for more liquidity or until a cooldown phase.
+
+                _swap(
+                    BalancerVault.SingleSwap({
+                        poolId: poolId,
+                        kind: BalancerVault.SwapKind.GIVEN_IN,
+                        assetIn: address(pt),
+                        assetOut: address(asset),
+                        amount: excessBal,
+                        userData: hex""
+                    })
+                );
+            } else {
+                periphery.swapYTsForTarget(address(adapter), maturity, excessBal); // Swapping YTs will fail if there isn't enough liquidity.
+            }
+        }
+    }
+
+    function afterDeposit(uint256 assets, uint256 shares) internal override {
+        if (maturity != MATURITY_NOT_SET) {
+            uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply - shares is non-zero.
+
+            (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
+
+            uint256 previewedLPShares = supply - shares == 0 ?
+                shares.mulDivDown(space.balanceOf(address(this)), supply - shares) : shares;
+
+            uint256 targetToJoin = previewedLPShares.mulDivDown(balances[1 - pti], space.totalSupply());
+
+            balances[1 - pti] = targetToJoin;
+            if (assets - targetToJoin > 0) { // Assumption: this will only be false if Space has only Target liquidity.
+                balances[pti] = divider.issue(address(adapter), maturity, assets - targetToJoin);
+            }
+
+            _joinPool(
+                poolId,
+                BalancerVault.JoinPoolRequest({
+                    assets: tokens,
+                    maxAmountsIn: balances,
+                    userData: abi.encode(balances, 0), // TODO: min bpt out
+                    fromInternalBalance: false
+                })
+            );
+        }
+    }
+
+    /// @notice Calculates the total assets of this vault using the current spot price of PTs/YTs, without factoring in slippage.
+    function totalAssets() public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return asset.balanceOf(address(this));
+        } else {
+            // upscale reserves?
+
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+            
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal) = _decomposeShares(ptReserves, targetReserves, totalSupply);
+
+            uint256 stretchedRate = (ptReserves + space.totalSupply()).divWadDown(
+                targetReserves.mulWadDown(initScale)
+            );
+            
+            uint256 scale = adapter.scaleStored(); // View-only scale getter.
+
+            uint256 ptSpotPrice = space.getPriceFromImpliedRate(stretchedRate); // PT price in Target.
+
+            if (ptBal >= ytBal) {
+                unchecked {
+                    uint256 diff = ptBal - ytBal;
+
+                    // Target + combined PTs/YTs + PT spot value.
+                    return targetBal + ptBal.divWadDown(scale) + ptSpotPrice.mulWadDown(diff);
+                }
+            } else {
+                unchecked {
+                    uint256 diff = ytBal - ptBal;
+
+                    // Target + combined PTs/YTs + YT spot value.
+                    return targetBal + ytBal.divWadDown(scale) + (ONE - ptSpotPrice).mulWadDown(diff);
+                }
+            }
+        }
+    }
+
+    /// @notice The difference between convertToShares and previewDeposit is only that slippage is considered in the latter
+    function previewDeposit(uint256 assets) public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return super.previewDeposit(assets);
+        } else {
+            (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
+
+            uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+
+            // Calculate how much Target we'll end up joining the pool with, and use that to preview minted LP shares.
+            uint256 previewedLPShares = (assets - _getTargetForIssuance(balances[pti], balances[1 - pti], assets, adapter.scaleStored()))
+                .mulDivDown(space.totalSupply(), balances[1 - pti]);
+
+            // Shares represent proportional ownership of the LP shares the vault holds.
+            return supply == 0 ? 
+                previewedLPShares : previewedLPShares.mulDivDown(supply, space.balanceOf(address(this)));
+        }
+    }
+
+    function previewMint(uint256 shares) public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return super.previewMint(shares);
+        } else {
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+
+            (uint256 targetToJoin, uint256 ptsToJoin, ) = _decomposeShares(ptReserves, targetReserves, shares);
+
+            uint256 targetToIssue = ptsToJoin.divWadDown(
+                Adapter(adapter).scaleStored().mulWadDown(1e18 - ifee)
+            );
+
+            return targetToJoin + targetToIssue;
+        }
+    }
+
+    function previewWithdraw(uint256 assets) public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return super.previewWithdraw(assets);
+        } else {
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+
+            uint256 lpShares = space.balanceOf(address(this));
+            uint256 pctPool = lpShares.divWadDown(space.totalSupply());
+
+            uint256 ptBal = pctPool.mulWadDown(ptReserves);
+            uint256 ytBal = yt.balanceOf(address(this));
+
+            if (ptBal >= ytBal) {
+                uint256 diff = ptBal - ytBal;
+                uint256 hole = diff.divWadDown(lpShares);
+
+                // uint256 adjPTReserves
+
+
+                // y = 1.2x + 1.4x + 0.5x * nonsense
+            } else {
+
+            }
+        }
+    }
+
+    /// @notice The difference between convertToAssets and previewRedeem is only that slippage is considered in the latter
+    function previewRedeem(uint256 shares) public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return super.previewRedeem(shares);
+        } else {
+            uint256 pctVault = shares.divWadDown(totalSupply);
+
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal) = _decomposeShares(ptReserves, targetReserves, shares);
+
+            uint256 scale = adapter.scaleStored();
+
+            if (ptBal >= ytBal) {
+                unchecked {
+                    uint256 diff = ptBal - ytBal;
+
+                    uint256 maxPTSale = maxPTSell();
+
+                    if (diff > maxPTSale) {
+                        // If there isn't enough liquidity to sell all of the PTs, sell the max that we can and ignore the remaining PTs.
+                        diff = maxPTSale;
+                    }
+
+                    // Target + combined PTs/YTs .
+                    return targetBal + ptBal.divWadDown(scale) + _previewSell(
+                        ptReserves - ptBal, targetReserves - targetBal, diff, true, true
+                    );
+                }
+            } else {
+                unchecked {
+                    uint256 diff = ytBal - ptBal;
+
+                    if (diff > ptReserves) {
+                        // If there isn't enough liquidity to sell all of the YTs, sell the max that we can and ignore the remaining YTs.
+                        diff = ptReserves;
+                    }
+
+                    (uint256 targetIn) = _previewSell(
+                        ptReserves - ptBal, targetReserves - targetBal, diff, true, false
+                    );
+
+                    // Target + combined PTs/YTs .
+                    return targetBal + ytBal.divWadDown(scale) + diff.divWadDown(scale) - targetIn;
+                }
+            }
+        }
+    }
+
+    function maxWithdraw(address owner) public view override returns (uint256) {
+        if (maturity == MATURITY_NOT_SET) {
+            return super.maxWithdraw(owner);
+        } else {
+            return previewRedeem(maxRedeem(owner));
+        }
+    }
+
+    function maxRedeem(address owner) public view override returns (uint256) { // No idiosyncratic owner restrictions.
+        if (maturity == MATURITY_NOT_SET) {
+            return super.maxRedeem(owner);
+        } else {
+            uint256 shares = balanceOf[owner];
+
+            (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+
+            uint256 spaceSupply = space.totalSupply();
+
+            uint256 lpShares = shares.mulDivDown(space.balanceOf(address(this)), totalSupply);
+            uint256 ptBal    = lpShares.mulDivDown(ptReserves, spaceSupply);
+            uint256 ytBal    = yt.balanceOf(address(this));
+
+            if (ptBal >= ytBal) {
+                uint256 diff = ptBal - ytBal;
+
+                uint256 maxPTSale = maxPTSell();
+
+                if (maxPTSale >= diff) {
+                    // We have enough liquidity to handle the sale.
+                    return shares;
+                } else {
+                    // For every unit of LP Share, the excess PT balance grows by "hole".
+                    uint256 hole = diff.divWadDown(lpShares);
+
+                    // Determine how many shares we can redeem without exceeding sell limits.
+                    return maxPTSale.divWadDown(hole).mulDivDown(totalSupply, space.balanceOf(address(this)));
+                }
+            } else {
+                uint256 diff = ytBal - ptBal;
+
+                if (ptReserves >= diff) {
+                    return shares;
+                } else {
+                    // For every unit of LP Share, the excess YT balance grows by "hole".
+                    uint256 hole = diff.divWadDown(lpShares);
+
+                    // todo: should we add a little buffer to max pt reserves for rounding?
+
+                    // Determine how many shares we can redeem without exceeding sell limits.
+                    return ptReserves.divWadDown(hole).mulDivDown(totalSupply, space.balanceOf(address(this)));
+                }
+            }
+        }
+    }
+
+    /* ========== 4626 EXTENSIONS ========== */
+
+    /// @notice Quick exit into the constituent assets
+    /// @dev Outside of the ERC 4626 standard
+    function eject(
+        uint256 shares,
+        address receiver,
+        address owner
+    ) public returns (uint256 assets, uint256 excessBal, bool isExcessPTs) {
+        if (maturity == MATURITY_NOT_SET) revert ActivePhaseOnly();
+
+        if (msg.sender != owner) {
+            uint256 allowed = allowance[owner][msg.sender]; // Saves gas for limited approvals.
+
+            if (allowed != type(uint256).max) allowance[owner][msg.sender] = allowed - shares;
+        }
+
+        _burn(owner, shares);
+
+        (excessBal, isExcessPTs) = _exitAndCombine(shares);
+
+        if (isExcessPTs) {
+            pt.transfer(receiver, excessBal);
+        } else {
+            yt.transfer(receiver, excessBal);
+        }
+
+        asset.transfer(receiver, assets = asset.balanceOf(address(this)));
+        emit Ejected(msg.sender, receiver, owner, assets, shares,
+            isExcessPTs ? excessBal : 0,
+            isExcessPTs ? 0 : excessBal
+        );
+    }
+
+    function maxPTSell() public view returns (uint256) { // Assumption: this function will never be called during a cooldown phase.
+        // edge case the pool is already at the max rate
+
+        (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+
+        (uint256 eqPTReserves, ) = _getEQReserves(
+            maxRate,
+            maturity,
+            ptReserves,
+            targetReserves,
+            space.totalSupply(),
+            initScale
+        );
+
+        return eqPTReserves - ptReserves;
+    }
+
+    /* ========== INTERNAL HELPERS ========== */
+
+    function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
+        uint256 supply = totalSupply;
+        uint256 lpShares = shares.mulDivUp(space.balanceOf(address(this)), supply);
+
+        ERC20[] memory tokens = new ERC20[](2);
+        tokens[pti] = pt; tokens[1 - pti] = asset;
+
+        uint256[] memory minAmountsOut = new uint256[](2); // TODO
+
+        _exitPool(
+            poolId,
+            BalancerVault.ExitPoolRequest({
+                assets: tokens,
+                minAmountsOut: minAmountsOut,
+                userData: abi.encode(lpShares),
+                toInternalBalance: false
+            })
+        );
+
+        uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
+        uint256 ptBal = pt.balanceOf(address(this));
+        emit A(ytBal);
+        emit A(yt.balanceOf(address(this)));
+        emit A(shares);
+        emit A(supply);
+        emit A(ptBal);
+        unchecked {
+            if (ptBal >= ytBal) {
+                return (ptBal - ytBal, true);
+            } else {
+                divider.combine(address(adapter), maturity, ptBal); // side-effect: will burn all YTs after maturity.
+                return (ytBal - ptBal, false);
+            }
+        }
+    }
+
+    /// @dev Calculates the amount of Target needed for issuance such that the PT:Target ratio in
+    ///      the Space pool will be preserved after issuing and joining the PTs and remaining Target
+    function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale) 
+        internal view returns (uint256) 
+    {
+        return targetBal.mulWadDown(ptReserves.divWadDown(
+            scale.mulWadDown(1e18 - ifee).mulWadDown(targetReserves) + ptReserves
+        ));
+    }
+
+    function _previewSell(uint256 ptReserves, uint256 targetReserves, uint256 amount, bool ptIn, bool givenIn) 
+        internal view returns (uint256) 
+    {
+        // run YS invariant...
+        return space.onSwap(
+            Space.SwapRequest({
+                kind: givenIn ? BalancerVault.SwapKind.GIVEN_IN : BalancerVault.SwapKind.GIVEN_OUT,
+                tokenIn: ptIn ? pt : asset,
+                tokenOut: ptIn ? asset : pt,
+                amount: amount,
+                poolId: poolId,
+                lastChangeBlock: 0,
+                from: address(0),
+                to: address(0),
+                userData: ""
+            }),
+            ptIn ? ptReserves : targetReserves,
+            ptIn ? targetReserves : ptReserves
+        );
+    }
+
+    /// @notice Given initial conditions, determine the reserve balances required to establish the given implied rate.
+    function _getEQReserves(
+        uint256 rate,
+        uint256 maturity,
+        uint256 initialPTReserves,
+        uint256 initialTargetReserves,
+        uint256 poolSupply,
+        uint256 initScale
+    ) internal view returns (uint256, uint256) {
+        // Stretch the targeted rate to match the Space pool's timeshift period.
+        // e.g. if the timestretch is 1/12 years in seconds, then the rate will be transformed from a yearly rate to a 12-year rate.
+        uint256 stretchedRate = _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE; // TODO: should we cache this?
+
+        // Selling PTs
+        uint256 a = ONE - space.g2().mulWadDown(space.ts().mulWadDown((maturity - block.timestamp) * ONE));
+        uint256 k = _powWad(initialPTReserves + poolSupply, a) + _powWad(initialTargetReserves.mulWadDown(initScale), a);
+        uint256 eqPTReservesPartial = _powWad(
+            k.divWadDown(ONE.divWadDown(_powWad(ONE + stretchedRate, a)) + ONE), ONE.divWadDown(a)
+        );
+
+        return (eqPTReservesPartial - poolSupply, eqPTReservesPartial.divWadDown(initScale.mulWadDown(ONE + stretchedRate)));
+    }
+
+    function _getSpaceReserves() internal view returns (uint256, uint256) {
+        (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
+
+        return (balances[pti], balances[1 - pti]);
+    }
+
+    function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares) 
+        internal view returns (uint256, uint256, uint256)
+    {
+        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply isn't equal to shares.
+
+        uint256 percentOwnership = (
+            supply == shares ? space.balanceOf(address(this)) : 
+                shares.mulDivDown(space.balanceOf(address(this)), supply)
+            ).divWadDown(space.totalSupply());
+
+        return (percentOwnership.mulWadUp(targetReserves), percentOwnership.mulWadUp(ptReserves), yt.balanceOf(address(this)));
+    }
+
+    function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
+        require(x < 1 << 255);
+        require(y < 1 << 255);
+
+        return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
+    }
+
+    /* ========== BALANCER HELPERS ========== */
+
+    function _joinPool(bytes32 poolId, BalancerVault.JoinPoolRequest memory request) internal {
+        balancerVault.joinPool(poolId, address(this), address(this), request);
+    }
+
+    function _exitPool(bytes32 poolId, BalancerVault.ExitPoolRequest memory request) internal {
+        balancerVault.exitPool(poolId, address(this), payable(address(this)), request);
+    }
+
+    function _swap(BalancerVault.SingleSwap memory request) internal {
+        BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
+            sender: address(this),
+            fromInternalBalance: false,
+            recipient: payable(address(this)),
+            toInternalBalance: false
+        });
+
+        balancerVault.swap(request, funds, 0, type(uint256).max); // todo: min accepted
+    }
+
+    /* ========== ADMIN ========== */
+
     function setSpaceFactory(address newSpaceFactory) external requiresTrust {
         emit SpaceFactoryChanged(address(spaceFactory), newSpaceFactory);
         spaceFactory = SpaceFactoryLike(newSpaceFactory);
     }
 
-    // TODO: setGap
 
+    function setGap(uint8 newGap) external requiresTrust {
+        emit GapChanged(gap, newGap);
+        gap = newGap;
+    }
+
+    function setWait(uint8 newGap) external requiresTrust {
+        emit GapChanged(gap, newGap);
+        gap = newGap;
+    }
+
+    function setFallbackRate(uint8 newGap) external requiresTrust {
+        emit GapChanged(gap, newGap);
+        gap = newGap;
+    }
+
+    // set periphery
     // params for target series
     // lock/end contract
-    // what do with the yts when initialized a price?
-    // roller role,
+    // roller role
+
+    /* ========== EVENTS ========== */
 
     event SpaceFactoryChanged(address oldSpaceFactory, address newSpaceFactory);
+    event GapChanged(uint256 oldGap, uint256 newGap);
+    event Ejected(
+        address indexed caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares,
+        uint256 pts,
+        uint256 yts
+    );
 }
