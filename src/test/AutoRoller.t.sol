@@ -134,8 +134,6 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
         autoRoller.setFallbackRate(fallbackRate);
 
-        emit log_named_uint("rate", fallbackRate);
-
         // 2. Roll Target into the first Series.
         autoRoller.roll();
 
@@ -143,17 +141,17 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertApproxEq(autoRoller.pt().balanceOf(address(autoRoller)), 0, 1e12);
         assertApproxEq(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
 
-        // Space space = autoRoller.space();
-        // ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
-        // uint256 pti = space.pti();
+        Space space = autoRoller.space();
+        ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
+        uint256 pti = space.pti();
 
-        // uint256 stretchedImpliedRate = (balances[pti] + space.totalSupply())
-        //     .divWadDown(balances[1 - pti].mulWadDown(mockAdapter.scale()));
+        uint256 stretchedImpliedRate = (balances[pti] + space.totalSupply())
+            .divWadDown(balances[1 - pti].mulWadDown(mockAdapter.scale())) - 1e18;
 
-        // uint256 impliedRate = _powWad(stretchedImpliedRate + 1e18, space.ts().mulWadDown(SECONDS_PER_YEAR * 1e18)) - 1e18;
+        uint256 impliedRate = _powWad(stretchedImpliedRate + 1e18, space.ts().mulWadDown(SECONDS_PER_YEAR * 1e18)) - 1e18;
 
-        // // Check that the actual implied rate in the pool is close the fallback rate.
-        // assertEq(impliedRate, fallbackRate);
+        // Check that the actual implied rate in the pool is close the fallback rate.
+        assertRelApproxEq(impliedRate, fallbackRate, 0.0001e18 /* 0.01% */);
     }
 
     function testRoll() public {
