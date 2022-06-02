@@ -587,6 +587,7 @@ contract AutoRoller is ERC4626, Trust {
 
         unchecked {
             if (ptBal >= ytBal) {
+                divider.combine(address(adapter), maturity, ytBal);
                 return (ptBal - ytBal, true);
             } else {
                 divider.combine(address(adapter), maturity, ptBal); // side-effect: will burn all YTs in this contract after maturity.
