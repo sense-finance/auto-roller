@@ -292,7 +292,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertRelApproxEq(previewedShares, aliceShareAmount, 0.000001e18 /* 0.0001% */);
         if (previewedShares != aliceShareAmount) {
             // Confirm rounding expectations.
-            assertLt(previewedShares, aliceShareAmount);
+            assertLt(previewedShares - 2, aliceShareAmount);
         }
         assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + 0.01e18, 0.00001e18 /* 0.001% */);
         assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + 0.01e18, 0.00001e18 /* 0.001% */);
