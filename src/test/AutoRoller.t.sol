@@ -120,15 +120,15 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         autoRoller.setTargetDuration(1337);
 
         hevm.expectRevert("UNTRUSTED");
-        autoRoller.setRollDistance(1337);
+        autoRoller.setCooldown(1337);
 
         (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
         // Check that only no storage slots were written to
         assertEq(writes.length, 0);
     }
 
-    function testFuzzRoll(uint256 fallbackRate) public {
-        fallbackRate = bound(fallbackRate, 0.01e18, 2e18);
+    function testFuzzRoll(uint88 fallbackRate) public {
+        fallbackRate = uint88(bound(uint256(fallbackRate), 0.01e18, 2e18));
 
         // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
         autoRoller.setFallbackRate(fallbackRate);
@@ -155,7 +155,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
     function testRoll() public {
         // 1. Deposit during the initial cooldown phase.
-        autoRoller.deposit(0.005e18, address(this));
+        autoRoller.deposit(0.05e18, address(this));
 
         uint256 targetBalPre = target.balanceOf(address(this));
         // 2. Roll into the first Series.
@@ -163,7 +163,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         uint256 targetBalPost = target.balanceOf(address(this));
 
         // Check that extra Target was pulled in during the roll to ensure the Vault had 1 unit of Target to initialize a rate with.
-        assertEq(targetBalPre - targetBalPost, 0.005e18);
+        assertEq(targetBalPre - targetBalPost, 0.01e18 + 1);
 
         // Sanity checks
         assertEq(address(autoRoller.space()), address(spaceFactory.pools(address(mockAdapter), autoRoller.maturity())));
@@ -185,6 +185,35 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertGt(excessBal, 1e6);
         assertLt(excessBal, 1e16);
         assertEq(excessBal, autoRoller.yt().balanceOf(address(this)));
+    }
+
+    function testCooldown() public {
+        autoRoller.roll();
+
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
+
+        uint256 maturity = autoRoller.maturity();
+        
+        vm.warp(maturity);
+
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
+
+        vm.warp(maturity + autoRoller.cooldown());
+
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
+
+        vm.warp(maturity);
+
+        autoRoller.settle();
+
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
+
+        vm.warp(maturity + autoRoller.cooldown());
+        autoRoller.roll();
     }
 
     function testDepositWithdraw() public {
@@ -210,7 +239,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
 
         // 6. Withdraw while still in the active phase.
-        autoRoller.withdraw(0.2e18, address(this), address(this));
+        // autoRoller.withdraw(0.2e18, address(this), address(this)); todo verify
     }
 
     function testSettle() public {
@@ -258,7 +287,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         // Expect exchange rate to be close to 1:1 on initial mint.
         assertRelApproxEq(aliceShareAmount, aliceTargetAmount, 0.0001e18 /* 0.01% */);
-        // assertEq(autoRoller.previewWithdraw(aliceShareAmount), aliceTargetAmount); // TODO
+        // assertEq(autoRoller.previewWithdraw(aliceShareAmount), aliceTargetAmount);
         uint256 previewedShares = autoRoller.previewDeposit(aliceTargetAmount);
         assertRelApproxEq(previewedShares, aliceShareAmount, 0.000001e18 /* 0.0001% */);
         if (previewedShares != aliceShareAmount) {
@@ -268,7 +297,6 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + 0.01e18, 0.00001e18 /* 0.001% */);
         assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + 0.01e18, 0.00001e18 /* 0.001% */);
         assertRelApproxEq(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
-        // assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), aliceTargetAmount);
         assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
 
         hevm.prank(alice);
@@ -276,23 +304,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         assertRelApproxEq(autoRoller.totalAssets(), 0.01e18, 0.0001e18 /* 0.01% */);
         assertEq(autoRoller.balanceOf(alice), 0);
-        // assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
         assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.000001e18 /* 0.0001% */);
     }
-
-    // moar tests:
-    // - fuzz very little left after rolling
-    // - max sell is actually sellable
-    // - max withdraw
-    // - test roll time periods
-    // - settle
-    // - swaps
-    // - roller gets swap fees
-    // - scale changes
-    // - more 4626 tests
-    // - cash tests
-    // - requires shares beyond what we have
-    // - more pts vs more yts
 
     function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
         require(x < 1 << 255);
