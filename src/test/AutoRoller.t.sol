@@ -13,7 +13,8 @@ import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
 import { Divider, TokenHandler } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
-import { Errors } from "sense-v1-utils/libs/Errors.sol";
+import { YT } from "sense-v1-core/tokens/YT.sol";
+import { Errors as SenseCoreErrors } from "sense-v1-utils/libs/Errors.sol";
 
 import { Space } from "../interfaces/Space.sol";
 import { BalancerVault } from "../interfaces/BalancerVault.sol";
@@ -95,34 +96,32 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         target.approve(address(autoRoller), 2e18);
     }
 
-    // Auto Roller auth ----
-    event SpaceFactoryChanged(address oldSpaceFactory, address newSpaceFactory);
-    function testUpdateSpaceFactory() public {
-        address oldSpaceFactory = address(autoRoller.spaceFactory());
+    // Auth
 
-        hevm.record();
-        address NEW_SPACE_FACTORY = address(0xbabe);
-
-        // Expect the new Space Factory to be set, and for a "change" event to be emitted
-        hevm.expectEmit(false, false, false, true);
-        emit SpaceFactoryChanged(oldSpaceFactory, NEW_SPACE_FACTORY);
-
-        // 1. Update the Space Factory address
-        autoRoller.setSpaceFactory(NEW_SPACE_FACTORY);
-        (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
-        // Check that the storage slot was updated correctly
-        assertEq(address(autoRoller.spaceFactory()), NEW_SPACE_FACTORY);
-        // Check that only one storage slot was written to
-        assertEq(writes.length, 1);
-    }
-    function testFuzzUpdateSpaceFactory(address lad) public {
+    function testFuzzUpdateAdminParams(address lad) public {
         hevm.record();
         hevm.assume(lad != address(this)); // For any address other than the testing contract
-        address NEW_SPACE_FACTORY = address(0xbabe);
-        // 1. Impersonate the fuzzed address and try to update the Space Factory address
-        hevm.prank(lad);
+
+        // 1. Impersonate the fuzzed address and try to update admin params
+        hevm.startPrank(lad);
         hevm.expectRevert("UNTRUSTED");
-        autoRoller.setSpaceFactory(NEW_SPACE_FACTORY);
+        autoRoller.setSpaceFactory(address(0xbabe));
+
+        hevm.expectRevert("UNTRUSTED");
+        autoRoller.setPeriphery(address(0xbabe));
+
+        hevm.expectRevert("UNTRUSTED");
+        autoRoller.setMaxRate(1337);
+
+        hevm.expectRevert("UNTRUSTED");
+        autoRoller.setFallbackRate(1337);
+
+        hevm.expectRevert("UNTRUSTED");
+        autoRoller.setTargetDuration(1337);
+
+        hevm.expectRevert("UNTRUSTED");
+        autoRoller.setRollDistance(1337);
+
         (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
         // Check that only no storage slots were written to
         assertEq(writes.length, 0);
@@ -156,19 +155,19 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
     function testRoll() public {
         // 1. Deposit during the initial cooldown phase.
-        autoRoller.deposit(0.6e18, address(this));
+        autoRoller.deposit(0.005e18, address(this));
 
         uint256 targetBalPre = target.balanceOf(address(this));
         // 2. Roll into the first Series.
         autoRoller.roll();
         uint256 targetBalPost = target.balanceOf(address(this));
 
+        // Check that extra Target was pulled in during the roll to ensure the Vault had 1 unit of Target to initialize a rate with.
+        assertEq(targetBalPre - targetBalPost, 0.005e18);
+
         // Sanity checks
         assertEq(address(autoRoller.space()), address(spaceFactory.pools(address(mockAdapter), autoRoller.maturity())));
         assertLt(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
-
-        // Check that extra Target was pulled in during the roll to ensure the Vault had 1 unit of Target to initialize a rate with.
-        assertEq(targetBalPre - targetBalPost, 0.4e18);
     }
 
     function testEject() public {
@@ -188,12 +187,112 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertEq(excessBal, autoRoller.yt().balanceOf(address(this)));
     }
 
+    function testDepositWithdraw() public {
+        // 1. Deposit during the initial cooldown phase.
+        autoRoller.deposit(0.2e18, address(this));
+        assertEq(autoRoller.balanceOf(address(this)), 0.2e18);
+
+        // 2. Deposit again, this time minting the Vault shares to alice.
+        autoRoller.deposit(0.2e18, alice);
+        assertEq(autoRoller.balanceOf(alice), 0.2e18);
+
+        vm.prank(alice);
+        // 3. Withdraw all of Alice's Target.
+        autoRoller.withdraw(0.2e18, alice, alice);
+        assertEq(autoRoller.balanceOf(alice), 0);
+        assertEq(target.balanceOf(alice), 0.2e18);
+
+        // 4. Roll the Target into the first Series.
+        autoRoller.roll();
+
+        // 5. Deposit during the first active phase.
+        autoRoller.deposit(0.3e18, address(this));
+        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
+
+        // 6. Withdraw while still in the active phase.
+        autoRoller.withdraw(0.2e18, address(this), address(this));
+    }
+
+    function testSettle() public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        vm.expectRevert(abi.encodeWithSelector(SenseCoreErrors.OutOfWindowBoundaries.selector));
+        autoRoller.settle();
+
+        vm.warp(autoRoller.maturity() - divider.SPONSOR_WINDOW() - 1);
+        vm.expectRevert(abi.encodeWithSelector(SenseCoreErrors.OutOfWindowBoundaries.selector));
+        autoRoller.settle();
+
+        ERC20 pt = autoRoller.pt();
+        YT yt = autoRoller.yt();
+
+        vm.warp(autoRoller.maturity() - divider.SPONSOR_WINDOW());
+        // 2. Settle the series and redeem the excess asset.
+        autoRoller.settle();
+
+        // Check that there are no PTs/YTs leftover
+        assertEq(pt.balanceOf(address(autoRoller)), 0);
+        assertEq(yt.balanceOf(address(autoRoller)), 0);
+
+        assertEq(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
+    }
+
+    // The following tests are adapted from Solmate's ERC4626 testing suite
+
+    function testFuzzSingleMintRedeemActivePhase(uint256 aliceShareAmount) public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        aliceShareAmount = bound(aliceShareAmount, 0.01e18, 100e18);
+
+        target.mint(alice, aliceShareAmount);
+
+        hevm.prank(alice);
+        target.approve(address(autoRoller), aliceShareAmount);
+
+        uint256 alicePreDepositBal = target.balanceOf(alice);
+
+        hevm.prank(alice);
+        uint256 aliceTargetAmount = autoRoller.mint(aliceShareAmount, alice);
+
+        // Expect exchange rate to be close to 1:1 on initial mint.
+        assertRelApproxEq(aliceShareAmount, aliceTargetAmount, 0.0001e18 /* 0.01% */);
+        // assertEq(autoRoller.previewWithdraw(aliceShareAmount), aliceTargetAmount); // TODO
+        uint256 previewedShares = autoRoller.previewDeposit(aliceTargetAmount);
+        assertRelApproxEq(previewedShares, aliceShareAmount, 0.000001e18 /* 0.0001% */);
+        if (previewedShares != aliceShareAmount) {
+            // Confirm rounding expectations.
+            assertLt(previewedShares, aliceShareAmount);
+        }
+        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + 0.01e18, 0.00001e18 /* 0.001% */);
+        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + 0.01e18, 0.00001e18 /* 0.001% */);
+        assertRelApproxEq(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
+        // assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), aliceTargetAmount);
+        assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
+
+        hevm.prank(alice);
+        autoRoller.redeem(aliceShareAmount, alice, alice);
+
+        assertRelApproxEq(autoRoller.totalAssets(), 0.01e18, 0.0001e18 /* 0.01% */);
+        assertEq(autoRoller.balanceOf(alice), 0);
+        // assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
+        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.000001e18 /* 0.0001% */);
+    }
 
     // moar tests:
     // - fuzz very little left after rolling
     // - max sell is actually sellable
     // - max withdraw
     // - test roll time periods
+    // - settle
+    // - swaps
+    // - roller gets swap fees
+    // - scale changes
+    // - more 4626 tests
+    // - cash tests
+    // - requires shares beyond what we have
+    // - more pts vs more yts
 
     function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
         require(x < 1 << 255);
