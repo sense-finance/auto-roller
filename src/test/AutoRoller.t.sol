@@ -123,7 +123,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         autoRoller.setCooldown(1337);
 
         (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
-        // Check that only no storage slots were written to
+        // Check that no storage slots were written to
         assertEq(writes.length, 0);
     }
 
