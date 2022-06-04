@@ -99,39 +99,39 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     // Auth
 
     function testFuzzUpdateAdminParams(address lad) public {
-        hevm.record();
-        hevm.assume(lad != address(this)); // For any address other than the testing contract
+        vm.record();
+        vm.assume(lad != address(this)); // For any address other than the testing contract
 
         // 1. Impersonate the fuzzed address and try to update admin params
-        hevm.startPrank(lad);
-        hevm.expectRevert("UNTRUSTED");
+        vm.startPrank(lad);
+        vm.expectRevert("UNTRUSTED");
         autoRoller.setSpaceFactory(address(0xbabe));
 
-        hevm.expectRevert("UNTRUSTED");
+        vm.expectRevert("UNTRUSTED");
         autoRoller.setPeriphery(address(0xbabe));
 
-        hevm.expectRevert("UNTRUSTED");
+        vm.expectRevert("UNTRUSTED");
         autoRoller.setMaxRate(1337);
 
-        hevm.expectRevert("UNTRUSTED");
-        autoRoller.setFallbackRate(1337);
+        vm.expectRevert("UNTRUSTED");
+        autoRoller.setTargetedRate(1337);
 
-        hevm.expectRevert("UNTRUSTED");
+        vm.expectRevert("UNTRUSTED");
         autoRoller.setTargetDuration(1337);
 
-        hevm.expectRevert("UNTRUSTED");
+        vm.expectRevert("UNTRUSTED");
         autoRoller.setCooldown(1337);
 
-        (, bytes32[] memory writes) = hevm.accesses(address(autoRoller));
+        (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
         // Check that no storage slots were written to
         assertEq(writes.length, 0);
     }
 
-    function testFuzzRoll(uint88 fallbackRate) public {
-        fallbackRate = uint88(bound(uint256(fallbackRate), 0.01e18, 2e18));
+    function testFuzzRoll(uint88 targetedRate) public {
+        targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 2e18));
 
         // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
-        autoRoller.setFallbackRate(fallbackRate);
+        autoRoller.setTargetedRate(targetedRate);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();
@@ -150,7 +150,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         uint256 impliedRate = _powWad(stretchedImpliedRate + 1e18, space.ts().mulWadDown(SECONDS_PER_YEAR * 1e18)) - 1e18;
 
         // Check that the actual implied rate in the pool is close the fallback rate.
-        assertRelApproxEq(impliedRate, fallbackRate, 0.0001e18 /* 0.01% */);
+        assertRelApproxEq(impliedRate, targetedRate, 0.0001e18 /* 0.01% */);
     }
 
     function testRoll() public {
@@ -162,8 +162,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         autoRoller.roll();
         uint256 targetBalPost = target.balanceOf(address(this));
 
-        // Check that extra Target was pulled in during the roll to ensure the Vault had 1 unit of Target to initialize a rate with.
-        assertEq(targetBalPre - targetBalPost, 0.01e18 + 1);
+        // Check that extra Target was pulled in during the roll to ensure the Vault had 0.01 unit of Target to initialize a rate with.
+        assertEq(targetBalPre - targetBalPost, 0.01e18);
 
         // Sanity checks
         assertEq(address(autoRoller.space()), address(spaceFactory.pools(address(mockAdapter), autoRoller.maturity())));
@@ -239,7 +239,13 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
 
         // 6. Withdraw while still in the active phase.
-        // autoRoller.withdraw(0.2e18, address(this), address(this)); todo verify
+        uint256 targetBalPre = target.balanceOf(address(this));
+        autoRoller.withdraw(0.2e18, address(this), address(this));
+        uint256 targetBalPost = target.balanceOf(address(this));
+        assertEq(targetBalPost - targetBalPre, 0.2e18);
+
+        // Check that the Target dust leftover is small
+        assertLt(target.balanceOf(address(autoRoller)), 1e9);
     }
 
     function testSettle() public {
@@ -267,6 +273,61 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertEq(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
     }
 
+    function testSponsorshipWindow() public {
+        (uint256 minm, uint256 maxm) = mockAdapter.getMaturityBounds();
+        assertEq(minm, 0);
+        assertEq(maxm, 0);
+
+        vm.record();
+        autoRoller.roll();
+        (, bytes32[] memory writes) = vm.accesses(address(mockAdapter));
+
+        assertEq(writes.length, 2);
+        assertEq(writes[0], writes[1]);
+
+        (minm, maxm) = mockAdapter.getMaturityBounds();
+        assertEq(minm, 0);
+        assertEq(maxm, 0);
+    }
+
+    function testFuzzMaxWithdraw(uint256 assets) public {
+        autoRoller.roll();
+
+        assets = bound(assets, 0.01e18, 100e18);
+
+        target.mint(alice, assets);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), assets);
+
+        vm.prank(alice);
+        uint256 aliceTargetAmount = autoRoller.deposit(assets, alice);
+
+        uint256 maxWithdraw = autoRoller.maxWithdraw(alice);
+        assertRelApproxEq(maxWithdraw, assets, 0.001e18 /* 0.1% */);
+    }
+
+    function testFuzzTotalAssets(uint256 assets) public {
+        autoRoller.roll();
+
+        assets = bound(assets, 0.01e18, 100e18);
+
+        target.mint(alice, assets);
+        target.mint(bob, assets);
+
+        vm.startPrank(alice);
+        target.approve(address(autoRoller), assets);
+        autoRoller.deposit(assets, alice);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        target.approve(address(autoRoller), assets);
+        autoRoller.deposit(assets, alice);
+        vm.stopPrank();
+
+        assertGt(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
+    }
+
     // The following tests are adapted from Solmate's ERC4626 testing suite
 
     function testFuzzSingleMintRedeemActivePhase(uint256 aliceShareAmount) public {
@@ -277,34 +338,210 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         target.mint(alice, aliceShareAmount);
 
-        hevm.prank(alice);
+        vm.prank(alice);
         target.approve(address(autoRoller), aliceShareAmount);
 
         uint256 alicePreDepositBal = target.balanceOf(alice);
 
-        hevm.prank(alice);
+        vm.prank(alice);
+        // 2. Have Alice mint shares.
         uint256 aliceTargetAmount = autoRoller.mint(aliceShareAmount, alice);
 
         // Expect exchange rate to be close to 1:1 on initial mint.
         assertRelApproxEq(aliceShareAmount, aliceTargetAmount, 0.0001e18 /* 0.01% */);
-        // assertEq(autoRoller.previewWithdraw(aliceShareAmount), aliceTargetAmount);
-        uint256 previewedShares = autoRoller.previewDeposit(aliceTargetAmount);
-        assertRelApproxEq(previewedShares, aliceShareAmount, 0.000001e18 /* 0.0001% */);
-        if (previewedShares != aliceShareAmount) {
+        uint256 previewedSharesIn = autoRoller.previewWithdraw(aliceTargetAmount * 0.999e18 / 1e18);
+        assertRelApproxEq(previewedSharesIn, aliceShareAmount, 0.001e18 /* 0.1% */);
+        if (previewedSharesIn != aliceShareAmount) {
             // Confirm rounding expectations.
-            assertLt(previewedShares - 2, aliceShareAmount);
+            assertGt(previewedSharesIn, aliceShareAmount * 0.999e18 / 1e18);
         }
-        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + 0.01e18, 0.00001e18 /* 0.001% */);
-        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + 0.01e18, 0.00001e18 /* 0.001% */);
+        uint256 previewedSharesOut = autoRoller.previewDeposit(aliceTargetAmount);
+        assertRelApproxEq(previewedSharesOut, aliceShareAmount, 0.000001e18 /* 0.0001% */);
+        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
         assertRelApproxEq(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
 
-        hevm.prank(alice);
+        vm.prank(alice);
         autoRoller.redeem(aliceShareAmount, alice, alice);
 
-        assertRelApproxEq(autoRoller.totalAssets(), 0.01e18, 0.0001e18 /* 0.01% */);
+        assertRelApproxEq(autoRoller.totalAssets(), autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
         assertEq(autoRoller.balanceOf(alice), 0);
-        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.000001e18 /* 0.0001% */);
+        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+    }
+
+    function testFuzzSingleMintRedeemActivePhasePTsIn(uint256 shareAmount) public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        shareAmount = bound(shareAmount, 0.001e18, 100e18);
+
+        target.mint(alice, shareAmount * 5);
+        target.mint(bob, shareAmount * 5);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), type(uint256).max);
+
+        vm.prank(bob);
+        target.approve(address(autoRoller), type(uint256).max);
+
+        vm.prank(bob);
+        // 2. Have Bob mint shares.
+        autoRoller.mint(shareAmount, bob);
+
+        // 3. Swap PTs in.
+        target.mint(address(this), 1e18);
+        target.approve(address(divider), 1e18);
+        divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
+        autoRoller.pt().approve(address(balancerVault), 1e18);
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: autoRoller.poolId(),
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(autoRoller.pt()),
+                assetOut: address(autoRoller.asset()),
+                amount: 0.001e18,
+                userData: hex""
+            })
+        );
+
+        uint256 alicePreDepositBal = target.balanceOf(alice);
+
+        vm.prank(alice);
+        // 4. Have Alice mint shares.
+        uint256 aliceTargetAmount = autoRoller.mint(shareAmount, alice);
+
+        // Expect exchange rate to be close to 1:1 on initial mint.
+        uint256 previewedSharesIn1 = autoRoller.previewWithdraw(aliceTargetAmount);
+        assertRelApproxEq(previewedSharesIn1, shareAmount, 0.005e18 /* 0.5% */);
+        if (previewedSharesIn1 != shareAmount) {
+            // Confirm rounding expectations.
+            assertGt(previewedSharesIn1, shareAmount);
+        }
+        uint256 previewedSharesOut = autoRoller.previewDeposit(aliceTargetAmount);
+        assertRelApproxEq(previewedSharesOut, shareAmount, 0.000001e18 /* 0.0001% */);
+        assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
+
+        target.mint(address(this), shareAmount * 2);
+        target.approve(address(autoRoller), type(uint256).max);
+        autoRoller.mint(shareAmount, address(this));
+
+        uint256 previewedSharesIn2 = autoRoller.previewWithdraw(aliceTargetAmount);
+
+        assertLt(previewedSharesIn2, previewedSharesIn1); // slippage is less, so it requires fewer shares to exit.
+
+        vm.prank(alice);
+        autoRoller.redeem(shareAmount, alice, alice);
+
+        assertEq(autoRoller.balanceOf(alice), 0);
+        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.005e18 /* 0.5% */);
+
+        // Bob can withdraw.
+        vm.prank(bob);
+        autoRoller.redeem(shareAmount, bob, bob);
+    }
+
+    function testFuzzSingleDepositWithdraw(uint256 amount) public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        amount = bound(amount, 0.001e18, 100e18);
+
+        target.mint(alice, amount);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), amount);
+
+        uint256 alicePreDepositBal = target.balanceOf(alice);
+
+        vm.prank(alice);
+        uint256 aliceShareAmount = autoRoller.deposit(amount, alice);
+
+        // Expect exchange rate to be 1:1 on initial deposit.
+        assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.001e18 /* 0.1% */);
+        assertEq(autoRoller.totalSupply(), aliceShareAmount + autoRoller.MIN_ASSET_AMOUNT());
+        assertRelApproxEq(autoRoller.totalAssets(), amount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
+        assertRelApproxEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), amount, 0.001e18 /* 0.1% */);
+        assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
+
+        vm.startPrank(alice);
+        autoRoller.withdraw(autoRoller.previewRedeem(autoRoller.balanceOf(alice)) * 0.99e18 / 1e18, alice, alice);
+        autoRoller.redeem(autoRoller.balanceOf(alice), alice, alice);
+        vm.stopPrank();
+
+        assertRelApproxEq(autoRoller.totalAssets(), autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
+        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+    }
+
+    function testFuzzSingleDepositWithdrawPTsIn(uint256 amount) public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        amount = bound(amount, 0.001e18, 100e18);
+
+        target.mint(alice, amount * 5);
+        target.mint(bob, amount * 5);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), type(uint256).max);
+
+        vm.prank(bob);
+        target.approve(address(autoRoller), type(uint256).max);
+
+        vm.prank(bob);
+        // 2. Have Bob deposit.
+        uint256 bobShareAmount = autoRoller.deposit(amount, bob);
+
+        // 3. Swap PTs in.
+        target.mint(address(this), 1e18);
+        target.approve(address(divider), 1e18);
+        divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
+        autoRoller.pt().approve(address(balancerVault), 1e18);
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: autoRoller.poolId(),
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(autoRoller.pt()),
+                assetOut: address(autoRoller.asset()),
+                amount: 0.001e18,
+                userData: hex""
+            })
+        );
+
+        uint256 alicePreDepositBal = target.balanceOf(alice);
+
+        vm.prank(alice);
+        // 4. Have Alice deposit.
+        uint256 aliceShareAmount = autoRoller.deposit(amount, alice);
+
+        // Expect exchange rate to be 1:1 on initial deposit.
+        assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.005e18 /* 0.5% */);
+        assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.005e18 /* 0.5% */);
+        assertEq(autoRoller.totalSupply(), aliceShareAmount + bobShareAmount + autoRoller.MIN_ASSET_AMOUNT());
+        assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
+        assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
+
+        vm.startPrank(alice);
+        autoRoller.withdraw(autoRoller.previewRedeem(autoRoller.balanceOf(alice)) * 0.99e18 / 1e18, alice, alice);
+        autoRoller.redeem(autoRoller.balanceOf(alice), alice, alice);
+        vm.stopPrank();
+
+        assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
+        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+    }
+
+    function _swap(BalancerVault.SingleSwap memory request) internal {
+        BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
+            sender: address(this),
+            fromInternalBalance: false,
+            recipient: payable(address(this)),
+            toInternalBalance: false
+        });
+
+        balancerVault.swap(request, funds, 0, type(uint256).max);
     }
 
     function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {

@@ -22,7 +22,7 @@ contract MockAdapter is OwnableAdapter, Trust{
         address _target,
         address _underlying,
         AdapterParams memory _adapterParams
-    ) BaseAdapter(_divider, _target, _underlying, 0 /* no issuance fee */, _adapterParams) Trust(msg.sender) { }
+    ) BaseAdapter(_divider, _target, _underlying, 0.0012e18, _adapterParams) Trust(msg.sender) { }
 
     function scaleStored() external view virtual override returns (uint256 _scale) {
         _scale = scale;
