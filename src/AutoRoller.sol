@@ -57,11 +57,12 @@ contract AutoRoller is ERC4626, Trust {
     /* ========== CONSTANTS ========== */
 
     uint32 public constant MATURITY_NOT_SET = type(uint32).max;
-    uint256 public constant MAX_ERROR = 1e8;
+    uint256 public constant ONE = 1e18;
+
+    uint256 public constant MAX_ERROR = 1e7; // A conservative buffer for "rounding" swap previews that accounts for compounded pow of imprecision.
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant MIN_ASSET_AMOUNT = 0.01e18;
     int256 public constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
-    uint256 public constant ONE = 1e18;
 
     /* ========== IMMUTABLES ========== */
 
@@ -272,7 +273,7 @@ contract AutoRoller is ERC4626, Trust {
 
     function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
         // Empty join to trigger Balancer protocol fee payments so that there won't be any surprise BPT mints to throw calculations off.
-        if (maturity != MATURITY_NOT_SET) _emptyJoin(); // These are unfortunate.
+        if (maturity != MATURITY_NOT_SET) _emptyJoin();
         return super.deposit(assets, receiver);
     }
     function mint(uint256 shares, address receiver) public override returns (uint256 assets) {
@@ -284,7 +285,7 @@ contract AutoRoller is ERC4626, Trust {
         return super.withdraw(assets, receiver, owner);
     }
     function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
-        if (maturity != MATURITY_NOT_SET) _emptyJoin();
+        if (maturity != MATURITY_NOT_SET) _emptyJoin(); // These are unfortunate.
         return super.redeem(shares, receiver, owner);
     }
 
@@ -313,7 +314,6 @@ contract AutoRoller is ERC4626, Trust {
             } else {
                 periphery.swapYTsForTarget(address(adapter), maturity, excessBal); // Swapping YTs will fail if there isn't enough liquidity.
             }
-            asset.balanceOf(address(this));
         }
     }
 
@@ -332,7 +332,7 @@ contract AutoRoller is ERC4626, Trust {
 
             balances[1 - _pti] = targetToJoin;
 
-            if (assets - targetToJoin > 0) { // Assumption: this will only be false if Space has only Target liquidity.
+            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity.
                 balances[_pti] = divider.issue(address(adapter), maturity, assets - targetToJoin);
             }
 
@@ -416,7 +416,7 @@ contract AutoRoller is ERC4626, Trust {
 
             uint256 scale = adapter.scaleStored();
 
-            uint256 loosePTs = pt.balanceOf(address(this));
+            uint256 loosePTs   = pt.balanceOf(address(this));
             uint256 looseAsset = asset.balanceOf(address(this));
 
             if (ptBal >= ytBal) {
@@ -478,29 +478,29 @@ contract AutoRoller is ERC4626, Trust {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewWithdraw(assets);
         } else {
-            int256 supply = totalSupply.safeCastToInt();
+            uint256 _supply = totalSupply;
 
-            int256 prevGuess  = _min(assets, totalSupply).safeCastToInt();
+            int256 prevGuess  = _min(assets, _supply).safeCastToInt();
             int256 prevAnswer = previewRedeem(prevGuess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
             int256 guess = prevGuess * WITHDRAWAL_GUESS_OFFSET / 1e18;
 
+            int256 supply = _supply.safeCastToInt();
+
             // Find the root or get very close to it using the secant method, which is slightly more efficient than Newton's
             // method if the cost of evaluating f and f' is similar.
-            for (uint256 i = 0; i < 20;) {
+            for (uint256 i = 0; i < 20;) { // 20 chosen as a safe bound for convergence from practical trials.
                 if (guess > supply) {
                     guess = supply;
                 }
 
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
-                if (answer >= -0 && answer <= 1e16 || (prevAnswer == answer)) { // Err on the side of overestimating shares needed.
+                if (answer >= 0 && answer <= 1e16 || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
                     return guess.safeCastToUint() + (MAX_ERROR - 1) / scalingFactor + 1;  // Buffer for pow discrepancies.
                 }
 
-                if (guess == supply && answer < 0) {
-                    revert TooFewAvailableShares();
-                }
+                if (guess == supply && answer < 0) revert TooFewAvailableShares();
 
                 int256 nextGuess = guess - (answer * (guess - prevGuess) / (answer - prevAnswer));
                 prevGuess  = guess;
@@ -514,7 +514,7 @@ contract AutoRoller is ERC4626, Trust {
         }
     }
 
-    function maxWithdraw(address owner) public override returns (uint256) {
+    function maxWithdraw(address owner) public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return super.maxWithdraw(owner);
         } else {
@@ -747,7 +747,7 @@ contract AutoRoller is ERC4626, Trust {
     /// @notice Space swap recreated so that we can preview the results locally with custom BPT supply values.
     /// @dev For a complete, well-commented mirror of this function, see Space.sol at https://github.com/sense-finance/space-v1/.
     function _previewSwap(uint256 reservesTokenIn, uint256 reservesTokenOut, uint256 spaceSupply, uint256 amount, bool ptIn, bool givenIn) 
-        internal view returns (uint256) 
+        internal view returns (uint256)
     {
         uint256 scale = adapter.scaleStored();
 
