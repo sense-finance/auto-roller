@@ -53,6 +53,7 @@ contract AutoRoller is ERC4626, Trust {
     error TooFewAvailableShares();
     error RollWindowNotOpen();
     error OnlyAdapter();
+    error SeriesNotSettled();
 
     /* ========== CONSTANTS ========== */
 
@@ -264,7 +265,14 @@ contract AutoRoller is ERC4626, Trust {
             }
         }
 
-        maturity = MATURITY_NOT_SET; // Enter a cooldown phase where users can redeem without slippage.
+        startCooldown();
+    }
+
+    // Enter a cooldown phase where users can redeem without slippage.
+    function startCooldown() public {
+        if (divider.mscale(adapter, maturity) == 0) revert SeriesNotSettled();
+
+        maturity = MATURITY_NOT_SET;
         lastSettle = uint32(block.timestamp);
         delete pt; delete yt; delete space; delete pti; delete poolId; delete initScale; // Re-set variables to defaults, collect gas refund.
     }
