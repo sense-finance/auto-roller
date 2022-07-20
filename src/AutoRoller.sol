@@ -365,12 +365,12 @@ contract AutoRoller is ERC4626, Trust {
 
             if (ptBal >= ytBal) {
                 // Target + combined PTs/YTs + PT spot value in Target.
-                return targetBal + ptBal.divWadDown(scale) + ptSpotPrice.mulWadDown(ptBal - ytBal);
+                return targetBal + ytBal.divWadDown(scale) + ptSpotPrice.mulWadDown(ptBal - ytBal);
             } else {
                 uint256 ytSpotPrice = (ONE - ptSpotPrice.mulWadDown(scale)).divWadDown(scale);
 
                 // Target + combined PTs/YTs + YT spot value in Target.
-                return targetBal + ytBal.divWadDown(scale) + ytSpotPrice.mulWadDown(ytBal - ptBal);
+                return targetBal + ptBal.divWadDown(scale) + ytSpotPrice.mulWadDown(ytBal - ptBal);
             }
         }
     }
