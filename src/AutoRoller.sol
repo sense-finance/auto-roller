@@ -270,7 +270,7 @@ contract AutoRoller is ERC4626, Trust {
 
     // Enter a cooldown phase where users can redeem without slippage.
     function startCooldown() public {
-        if (divider.mscale(adapter, maturity) == 0) revert SeriesNotSettled();
+        if (divider.mscale(address(adapter), maturity) == 0) revert SeriesNotSettled();
 
         maturity = MATURITY_NOT_SET;
         lastSettle = uint32(block.timestamp);
