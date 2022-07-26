@@ -1,0 +1,21 @@
+{
+    "name": "@sense-finance/auto-roller",
+    "description": "Automatically rolling Space LP position",
+    "license": "AGPL-3.0-only",
+    "version": "1.0.0",
+    "private": true,
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/sense-finance/auto-roller.git"
+    },
+    "workspaces": [
+      "src/**/*.sol"
+    ],
+    "devDependencies": {
+      "prettier": "^2.3.1",
+      "prettier-plugin-solidity": "^1.0.0-beta.13"
+    },
+    "scripts": {
+      "lint": "prettier --write **.sol"
+    }
+}
