@@ -123,9 +123,6 @@ contract AutoRoller is ERC4626, Trust {
 
         minSwapAmount = (periphery.MIN_YT_SWAP_IN() - 1) / scalingFactor + 1; // Rounds up to cover low decimal tokens.
 
-        // Prevent transfers to this contract.
-        balanceOf[address(this)] = type(uint256).max;
-
         adapter = _adapter;
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
     }
