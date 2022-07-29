@@ -502,7 +502,7 @@ contract AutoRoller is ERC4626, Trust {
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
                 if (answer >= 0 && answer <= 1e16 || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
-                    return guess.safeCastToUint() + (MAX_ERROR - 1) / scalingFactor + 1;  // Buffer for pow discrepancies.
+                    break;
                 }
 
                 if (guess == supply && answer < 0) revert TooFewAvailableShares();
