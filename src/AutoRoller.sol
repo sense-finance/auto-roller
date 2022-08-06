@@ -360,7 +360,7 @@ contract AutoRoller is ERC4626, Trust {
         } else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
             
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, false);
 
             uint256 ptSpotPrice = space.getPriceFromImpliedRate(
                 (ptReserves + space.totalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - ONE
@@ -402,7 +402,7 @@ contract AutoRoller is ERC4626, Trust {
         } else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetToJoin, uint256 ptsToJoin, , ) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetToJoin, uint256 ptsToJoin, , ) = _decomposeShares(ptReserves, targetReserves, shares, true);
 
             return targetToJoin + ptsToJoin.divWadUp(adapter.scaleStored().mulWadDown(1e18 - ifee)); // targetToJoin + targetToIssue
         }
@@ -415,7 +415,7 @@ contract AutoRoller is ERC4626, Trust {
         } else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, false);
 
             uint256 scale = adapter.scaleStored();
 
@@ -533,7 +533,7 @@ contract AutoRoller is ERC4626, Trust {
 
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, false);
 
             if (ptBal >= ytBal) {
                 uint256 diff = ptBal - ytBal;
@@ -702,21 +702,24 @@ contract AutoRoller is ERC4626, Trust {
 
     /// @dev Decompose shares works to break shares into their constituent parts, 
     ///      and also preview the assets required to mint a given number of shares.
-    function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares) 
+    function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares, bool roundUp)
         internal view returns (uint256, uint256, uint256, uint256)
     {
         uint256 supply      = totalSupply;
         uint256 totalLPBal  = space.balanceOf(address(this));
         uint256 spaceSupply = space.totalSupply();
 
-        // A user has a right to PTs/asset floating around unlocked in the vault anytime.
-        // In case there's a grifting attack where excess PTs or YTs are sent to the vault such that the imbalance is large,
-        // it's expected that a user will simply exit a tiny position and claim them.
-        return (
-            shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply), supply) + asset.balanceOf(address(this)),
-            shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply), supply) + pt.balanceOf(address(this)),
+        // Shares have a right to a portion of the PTs/asset floating around unencombered in this contract.
+        return roundUp ? ( // TODO: could this be compressed by doing the math without solmate?
+            shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply) + asset.balanceOf(address(this)), supply),
+            shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply) + pt.balanceOf(address(this)), supply),
             shares.mulDivUp(yt.balanceOf(address(this)), supply),
             shares.mulDivUp(totalLPBal, supply)
+        ) : (
+            shares.mulDivDown(totalLPBal.mulDivDown(targetReserves, spaceSupply) + asset.balanceOf(address(this)), supply),
+            shares.mulDivDown(totalLPBal.mulDivDown(ptReserves, spaceSupply) + pt.balanceOf(address(this)), supply),
+            shares.mulDivDown(yt.balanceOf(address(this)), supply),
+            shares.mulDivDown(totalLPBal, supply)
         );
     }
 
