@@ -413,8 +413,6 @@ contract AutoRoller is ERC4626, Trust {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewRedeem(shares);
         } else {
-            if (shares > totalSupply) revert TooFewAvailableShares();
-
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares);
