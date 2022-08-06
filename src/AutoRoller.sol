@@ -174,8 +174,8 @@ contract AutoRoller is ERC4626, Trust {
         _yt.approve(address(periphery), type(uint256).max);
 
         ERC20[] memory tokens = new ERC20[](2);
-
-        tokens[_pti] = _pt; tokens[1 - _pti] = asset;
+        tokens[1 - _pti] = asset;
+        tokens[_pti] = _pt;
 
         uint256 targetBal = asset.balanceOf(address(this));
 
@@ -609,7 +609,8 @@ contract AutoRoller is ERC4626, Trust {
         uint256 lpBal = shares.mulDivDown(space.balanceOf(address(this)), supply);
 
         ERC20[] memory tokens = new ERC20[](2);
-        tokens[pti] = pt; tokens[1 - pti] = asset;
+        tokens[1 - pti] = asset;
+        tokens[pti] = pt;
 
         _exitPool(
             poolId,
@@ -661,8 +662,8 @@ contract AutoRoller is ERC4626, Trust {
         uint256[] memory balances = new uint256[](2);
 
         ERC20[] memory tokens = new ERC20[](2);
-
-        tokens[pti] = pt; tokens[1 - pti] = asset;
+        tokens[1 - pti] = asset;
+        tokens[pti] = pt;
 
         balancerVault.joinPool(poolId, address(this), address(this), BalancerVault.JoinPoolRequest({
                 assets: tokens,
