@@ -40,6 +40,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
     SpaceFactoryLike spaceFactory;
     BalancerVault balancerVault;
+    Periphery periphery;
     Divider divider;
     ERC20 pt;
     ERC20 yt;
@@ -54,7 +55,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
         divider = Divider(spaceFactory.divider());
 
         vm.label(address(spaceFactory), "SpaceFactory");
@@ -105,22 +106,22 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // 1. Impersonate the fuzzed address and try to update admin params
         vm.startPrank(lad);
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setSpaceFactory(address(0xbabe));
+        autoRoller.setParam("SPACE_FACTORY", address(0xbabe));
 
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setPeriphery(address(0xbabe));
+        autoRoller.setParam("PERIPHERY", address(0xbabe));
 
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setMaxRate(1337);
+        autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setTargetedRate(1337);
+        autoRoller.setParam("TARGET_RATE", 1337);
 
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setTargetDuration(1337);
+        autoRoller.setParam("TARGET_DURATION", 1337);
 
         vm.expectRevert("UNTRUSTED");
-        autoRoller.setCooldown(1337);
+        autoRoller.setParam("COOLDOWN", 1337);
 
         (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
         // Check that no storage slots were written to
@@ -131,16 +132,16 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 2e18));
 
         // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
-        autoRoller.setTargetedRate(targetedRate);
+        autoRoller.setParam("TARGET_RATE", targetedRate);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();
 
         // Check that less than 1e7 PTs & Target are leftover
-        assertApproxEq(autoRoller.pt().balanceOf(address(autoRoller)), 0, 1e12);
+        assertApproxEq(ERC20(divider.pt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(autoRoller)), 0, 1e12);
         assertApproxEq(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
 
-        Space space = autoRoller.space();
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
         ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
         uint256 pti = space.pti();
 
@@ -166,7 +167,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertEq(targetBalPre - targetBalPost, 0.01e18);
 
         // Sanity checks
-        assertEq(address(autoRoller.space()), address(spaceFactory.pools(address(mockAdapter), autoRoller.maturity())));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+        assertTrue(address(space) != address(0));
         assertLt(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
     }
 
@@ -184,7 +186,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertBoolEq(isExcessPTs, false);
         assertGt(excessBal, 1e6);
         assertLt(excessBal, 1e16);
-        assertEq(excessBal, autoRoller.yt().balanceOf(address(this)));
+        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
+        assertEq(excessBal, yt.balanceOf(address(this)));
     }
 
     function testCooldown() public {
@@ -259,8 +262,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         vm.expectRevert(abi.encodeWithSelector(SenseCoreErrors.OutOfWindowBoundaries.selector));
         autoRoller.settle();
 
-        ERC20 pt = autoRoller.pt();
-        YT yt = autoRoller.yt();
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
 
         vm.warp(autoRoller.maturity() - divider.SPONSOR_WINDOW());
         // 2. Settle the series and redeem the excess asset.
@@ -356,16 +359,20 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             assertGt(previewedSharesIn, aliceShareAmount * 0.999e18 / 1e18);
         }
         uint256 previewedSharesOut = autoRoller.previewDeposit(aliceTargetAmount);
+
+        uint256 scalingFactor = 10**(18 - autoRoller.decimals());
+        uint256 firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
+
         assertRelApproxEq(previewedSharesOut, aliceShareAmount, 0.000001e18 /* 0.0001% */);
-        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
-        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + firstDeposit, 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + firstDeposit, 0.001e18 /* 0.1% */);
         assertRelApproxEq(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
 
         vm.prank(alice);
         autoRoller.redeem(aliceShareAmount, alice, alice);
 
-        assertRelApproxEq(autoRoller.totalAssets(), autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.balanceOf(alice), 0);
         assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
@@ -393,12 +400,16 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         target.mint(address(this), 1e18);
         target.approve(address(divider), 1e18);
         divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
-        autoRoller.pt().approve(address(balancerVault), 1e18);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        pt.approve(address(balancerVault), 1e18);
         _swap(
             BalancerVault.SingleSwap({
-                poolId: autoRoller.poolId(),
+                poolId: space.getPoolId(),
                 kind: BalancerVault.SwapKind.GIVEN_IN,
-                assetIn: address(autoRoller.pt()),
+                assetIn: address(pt),
                 assetOut: address(autoRoller.asset()),
                 amount: 0.001e18,
                 userData: hex""
@@ -447,6 +458,9 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         amount = bound(amount, 0.001e18, 100e18);
 
+        uint256 scalingFactor = 10**(18 - autoRoller.decimals());
+        uint256 firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
+
         target.mint(alice, amount);
 
         vm.prank(alice);
@@ -460,8 +474,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // Expect exchange rate to be 1:1 on initial deposit.
         assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.001e18 /* 0.1% */);
         assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.001e18 /* 0.1% */);
-        assertEq(autoRoller.totalSupply(), aliceShareAmount + autoRoller.MIN_ASSET_AMOUNT());
-        assertRelApproxEq(autoRoller.totalAssets(), amount + autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertEq(autoRoller.totalSupply(), aliceShareAmount + firstDeposit);
+        assertRelApproxEq(autoRoller.totalAssets(), amount + firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
         assertRelApproxEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), amount, 0.001e18 /* 0.1% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
@@ -471,7 +485,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         autoRoller.redeem(autoRoller.balanceOf(alice), alice, alice);
         vm.stopPrank();
 
-        assertRelApproxEq(autoRoller.totalAssets(), autoRoller.MIN_ASSET_AMOUNT(), 0.001e18 /* 0.1% */);
+        assertRelApproxEq(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
         assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
@@ -481,6 +495,9 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         autoRoller.roll();
 
         amount = bound(amount, 0.001e18, 100e18);
+
+        uint256 scalingFactor = 10**(18 - autoRoller.decimals());
+        uint256 firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
 
         target.mint(alice, amount * 5);
         target.mint(bob, amount * 5);
@@ -499,12 +516,16 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         target.mint(address(this), 1e18);
         target.approve(address(divider), 1e18);
         divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
-        autoRoller.pt().approve(address(balancerVault), 1e18);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        pt.approve(address(balancerVault), 1e18);
         _swap(
             BalancerVault.SingleSwap({
-                poolId: autoRoller.poolId(),
+                poolId: space.getPoolId(),
                 kind: BalancerVault.SwapKind.GIVEN_IN,
-                assetIn: address(autoRoller.pt()),
+                assetIn: address(pt),
                 assetOut: address(autoRoller.asset()),
                 amount: 0.001e18,
                 userData: hex""
@@ -520,7 +541,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // Expect exchange rate to be 1:1 on initial deposit.
         assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.005e18 /* 0.5% */);
         assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.005e18 /* 0.5% */);
-        assertEq(autoRoller.totalSupply(), aliceShareAmount + bobShareAmount + autoRoller.MIN_ASSET_AMOUNT());
+        assertEq(autoRoller.totalSupply(), aliceShareAmount + bobShareAmount + firstDeposit);
         assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
         assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
 

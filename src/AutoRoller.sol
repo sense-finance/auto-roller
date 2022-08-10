@@ -49,8 +49,8 @@ contract AutoRoller is ERC4626, Trust {
     /* ========== ERRORS ========== */
 
     error ActivePhaseOnly();
+    error UnrecognizedParam(bytes32 what);
     error InsufficientLiquidity();
-    error TooFewAvailableShares();
     error RollWindowNotOpen();
     error OnlyAdapter();
     error SeriesNotSettled();
@@ -62,7 +62,6 @@ contract AutoRoller is ERC4626, Trust {
 
     uint256 public constant MAX_ERROR = 1e7; // A conservative buffer for "rounding" swap previews that accounts for compounded pow of imprecision.
     uint256 public constant SECONDS_PER_YEAR = 31536000;
-    uint256 public constant MIN_ASSET_AMOUNT = 0.01e18;
     int256 public constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
 
     /* ========== IMMUTABLES ========== */
@@ -70,9 +69,11 @@ contract AutoRoller is ERC4626, Trust {
     Divider        public immutable divider;
     BalancerVault  public immutable balancerVault;
     OwnableAdapter public immutable adapter;
-    uint256        public immutable ifee;
-    uint256        public immutable minSwapAmount;
-    uint256        public immutable scalingFactor;
+
+    uint256        internal immutable ifee;
+    uint256        internal immutable minSwapAmount;
+    uint256        internal immutable scalingFactor;
+    uint256        internal immutable firstDeposit;
 
     /* ========== MUTABLE STORAGE ========== */
 
@@ -80,10 +81,10 @@ contract AutoRoller is ERC4626, Trust {
     SpaceFactoryLike public spaceFactory;
 
     // Active Series
-    YT      public yt;
-    ERC20   public pt;
-    Space   public space;
-    bytes32 public poolId;
+    YT      internal yt;
+    ERC20   internal pt;
+    Space   internal space;
+    bytes32 internal poolId;
     // Packed slot 1
     uint216 public initScale;
     uint32  public maturity = MATURITY_NOT_SET;
@@ -122,6 +123,7 @@ contract AutoRoller is ERC4626, Trust {
         scalingFactor = 10**(18 - decimals);
 
         minSwapAmount = (periphery.MIN_YT_SWAP_IN() - 1) / scalingFactor + 1; // Rounds up to cover low decimal tokens.
+        firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
 
         adapter = _adapter;
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
@@ -136,7 +138,7 @@ contract AutoRoller is ERC4626, Trust {
         if (lastSettle == 0) {
             // If this is the first roll, lock some shares in by minting them for the zero address.
             // This prevents the contract from reaching an empty state during future active periods.
-            deposit((MIN_ASSET_AMOUNT - 1) / scalingFactor + 1, address(0));
+            deposit(firstDeposit, address(0));
         } else if (lastSettle + cooldown > block.timestamp) {
             revert RollWindowNotOpen();
         }
@@ -154,6 +156,7 @@ contract AutoRoller is ERC4626, Trust {
         // Allow the Periphery to move stake for sponsoring the Series.
         ERC20(stake).approve(address(periphery), stakeSize);
 
+        // TODO: gas optimize
         (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, targetDuration));
         uint256 nextMaturity = DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
 
@@ -209,7 +212,7 @@ contract AutoRoller is ERC4626, Trust {
                 poolId: _poolId,
                 kind: BalancerVault.SwapKind.GIVEN_IN,
                 assetIn: address(_pt),
-                assetOut: address(asset),
+                assetOut: address(tokens[1 - _pti]),
                 amount: eqPTReserves.mulDivDown(balances[1 - _pti], targetBal),
                 userData: hex""
             })
@@ -254,22 +257,20 @@ contract AutoRoller is ERC4626, Trust {
             ERC20(stake).safeTransfer(msg.sender, stakeSize);
         }
 
-        (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply); // Collects & burns YTs as a side-effect.
-
-        if (excessBal > 0) {
-            if (isExcessPTs) {
-                divider.redeem(address(adapter), maturity, excessBal); // Burns the PTs.
-            } else {
-                yt.collect(); // Burns the YTs.
-            }
-        }
-
         startCooldown();
     }
 
     // Enter a cooldown phase where users can redeem without slippage.
     function startCooldown() public {
         if (divider.mscale(address(adapter), maturity) == 0) revert SeriesNotSettled();
+
+        (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
+
+        if (isExcessPTs) {
+            divider.redeem(address(adapter), maturity, excessBal); // Burns the PTs.
+        } else {
+            yt.collect(); // Burns the YTs.
+        }
 
         maturity = MATURITY_NOT_SET;
         lastSettle = uint32(block.timestamp);
@@ -505,7 +506,7 @@ contract AutoRoller is ERC4626, Trust {
                     break;
                 }
 
-                if (guess == supply && answer < 0) revert TooFewAvailableShares();
+                if (guess == supply && answer < 0) revert InsufficientLiquidity();
 
                 int256 nextGuess = guess - (answer * (guess - prevGuess) / (answer - prevAnswer));
                 prevGuess  = guess;
@@ -537,7 +538,7 @@ contract AutoRoller is ERC4626, Trust {
 
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, false);
 
-            if (ptBal >= ytBal) {
+            if (ptBal > ytBal) {
                 uint256 diff = ptBal - ytBal;
 
                 uint256 maxPTSale = _maxPTSell(ptReserves - ptBal, targetReserves - targetBal, space.totalSupply() - lpBal);
@@ -629,10 +630,10 @@ contract AutoRoller is ERC4626, Trust {
 
         unchecked {
             // Safety: an inequality check is done before subtraction.
-            if (ptBal >= ytBal) {
-                divider.combine(address(adapter), maturity, ytBal); // Side-effect: will burn all YTs in this contract after maturity.
+            if (ptBal > ytBal) {
+                divider.combine(address(adapter), maturity, ytBal);
                 return (ptBal - ytBal, true);
-            } else {
+            } else { // Set excess PTs to falase if the balances are exactly equal.
                 divider.combine(address(adapter), maturity, ptBal);
                 return (ytBal - ptBal, false);
             }
@@ -667,12 +668,15 @@ contract AutoRoller is ERC4626, Trust {
         tokens[1 - pti] = asset;
         tokens[pti] = pt;
 
-        balancerVault.joinPool(poolId, address(this), address(this), BalancerVault.JoinPoolRequest({
+        _joinPool(
+            poolId,
+            BalancerVault.JoinPoolRequest({
                 assets: tokens,
                 maxAmountsIn: balances,
                 userData: abi.encode(balances, 0),
                 fromInternalBalance: false
-        }));
+            })
+        );
     }
 
     /* ========== NUMERICAL UTILS ========== */
@@ -712,16 +716,11 @@ contract AutoRoller is ERC4626, Trust {
         uint256 spaceSupply = space.totalSupply();
 
         // Shares have a right to a portion of the PTs/asset floating around unencombered in this contract.
-        return roundUp ? ( // TODO: could this be compressed by doing the math without solmate?
+        return ( // TODO: could this be compressed by doing the math without solmate?
             shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply) + asset.balanceOf(address(this)), supply),
             shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply) + pt.balanceOf(address(this)), supply),
             shares.mulDivUp(yt.balanceOf(address(this)), supply),
             shares.mulDivUp(totalLPBal, supply)
-        ) : (
-            shares.mulDivDown(totalLPBal.mulDivDown(targetReserves, spaceSupply) + asset.balanceOf(address(this)), supply),
-            shares.mulDivDown(totalLPBal.mulDivDown(ptReserves, spaceSupply) + pt.balanceOf(address(this)), supply),
-            shares.mulDivDown(yt.balanceOf(address(this)), supply),
-            shares.mulDivDown(totalLPBal, supply)
         );
     }
 
@@ -742,7 +741,7 @@ contract AutoRoller is ERC4626, Trust {
         // e.g. if the timestretch is 1/12 years in seconds, then the rate will be transformed from a yearly rate to a 12-year rate.
         uint256 stretchedRate = _powWad(rate + ONE, ONE.divWadDown(ts.mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE;
 
-        // This will revert after maturity if the Series hasn't been settled. And that is a good thing.
+        // This will revert after maturity if the Series hasn't been settled.
         // Assumption: the swap to get to these reserves will be PTs -> Target, so we use the G2 fee.
         uint256 a = ONE - space.g2().mulWadDown(ts.mulWadDown((maturity - block.timestamp) * ONE));
         uint256 k = _powWad(ptReserves + spaceSupply, a) + _powWad(targetReserves.mulWadDown(initScale), a);
@@ -826,45 +825,28 @@ contract AutoRoller is ERC4626, Trust {
 
     /* ========== ADMIN ========== */
 
-    function setSpaceFactory(address newSpaceFactory) external requiresTrust {
-        emit SpaceFactoryChanged(address(spaceFactory), newSpaceFactory);
-        spaceFactory = SpaceFactoryLike(newSpaceFactory);
+    function setParam(bytes32 what, address data) external requiresTrust {
+        if (what == "SPACE_FACTORY") spaceFactory = SpaceFactoryLike(data);
+        else if (what == "PERIPHERY") periphery = PeripheryLike(data);
+        else revert UnrecognizedParam(what);
+        emit ParamChanged(what, data);
     }
 
-    function setPeriphery(address newPeriphery) external requiresTrust {
-        emit PeripheryChanged(address(periphery), newPeriphery);
-        periphery = PeripheryLike(newPeriphery);
-    }
-
-    function setMaxRate(uint88 newMaxRate) external requiresTrust {
-        emit MaxRateChanged(maxRate, newMaxRate);
-        maxRate = newMaxRate;
-    }
-
-    function setTargetedRate(uint88 newTargetedRate) external requiresTrust {
-        emit TargetedRateChanged(targetedRate, newTargetedRate);
-        targetedRate = newTargetedRate;
-    }
-
-    function setTargetDuration(uint16 newTargetDuration) external requiresTrust {
-        emit TargetDurationChanged(targetDuration, newTargetDuration);
-        targetDuration = newTargetDuration;
-    }
-
-    function setCooldown(uint32 newCooldown) external requiresTrust {
-        emit CooldownChanged(cooldown, newCooldown);
-        cooldown = newCooldown;
+    function setParam(bytes32 what, uint256 data) external requiresTrust {
+        if (what == "MAX_RATE") maxRate = uint88(data);
+        else if (what == "TARGET_RATE") targetedRate = uint88(data);
+        else if (what == "TARGET_DURATION") targetDuration = uint16(data);
+        else if (what == "COOLDOWN") cooldown = uint32(data);
+        else revert UnrecognizedParam(what);
+        emit ParamChanged(what, data);
     }
 
     /* ========== EVENTS ========== */
 
+    event ParamChanged(bytes32 what, address newData);
+    event ParamChanged(bytes32 what, uint256 newData);
+
     event Rolled(uint256 nextMaturity, uint256 initScale, address space);
-    event SpaceFactoryChanged(address oldSpaceFactory, address newSpaceFactory);
-    event PeripheryChanged(address oldPeriphery, address newPeriphery);
-    event MaxRateChanged(uint88 oldMaxRate, uint88 newMaxRate);
-    event TargetedRateChanged(uint88 oldTargetedRate, uint88 newTargetedRate);
-    event TargetDurationChanged(uint16 oldTargetDuration, uint16 newTargetDuration);
-    event CooldownChanged(uint32 oldCooldown, uint32 newCooldown);
     event Ejected(
         address indexed caller,
         address indexed receiver,
