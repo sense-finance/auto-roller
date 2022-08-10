@@ -237,6 +237,8 @@ contract AutoRoller is ERC4626, Trust {
         initScale = scale.safeCastTo216();
         maturity  = uint32(nextMaturity);
         pti       = _pti;
+
+        emit Rolled(nextMaturity, uint256(initScale), _space);
     }
 
     /// @notice Settle the active Series and enter a cooldown phase.
@@ -290,7 +292,7 @@ contract AutoRoller is ERC4626, Trust {
         return super.withdraw(assets, receiver, owner);
     }
     function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
-        if (maturity != MATURITY_NOT_SET) _emptyJoin(); // These are unfortunate.
+        if (maturity != MATURITY_NOT_SET) _emptyJoin(); // These are unfortunate as we have to pay this extra gas just to update pool fee accounting.
         return super.redeem(shares, receiver, owner);
     }
 
@@ -856,6 +858,7 @@ contract AutoRoller is ERC4626, Trust {
 
     /* ========== EVENTS ========== */
 
+    event Rolled(uint256 nextMaturity, uint256 initScale, address space);
     event SpaceFactoryChanged(address oldSpaceFactory, address newSpaceFactory);
     event PeripheryChanged(address oldPeriphery, address newPeriphery);
     event MaxRateChanged(uint88 oldMaxRate, uint88 newMaxRate);
