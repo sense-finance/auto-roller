@@ -238,7 +238,7 @@ contract AutoRoller is ERC4626, Trust {
         maturity  = uint32(nextMaturity);
         pti       = _pti;
 
-        emit Rolled(nextMaturity, uint256(initScale), _space);
+        emit Rolled(nextMaturity, uint256(initScale), address(_space));
     }
 
     /// @notice Settle the active Series and enter a cooldown phase.
