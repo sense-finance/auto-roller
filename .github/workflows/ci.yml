@@ -25,3 +25,9 @@ jobs:
 
       - name: Run forge tests
         run: forge test
+
+      - name: Check code coverage
+        run: forge coverage --report lcov
+        id: coverage
+
+      - uses: codecov/codecov-action@v2
