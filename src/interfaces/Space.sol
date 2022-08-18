@@ -6,43 +6,12 @@ import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { BalancerVault } from "./BalancerVault.sol";
 
 interface Space {
-    function getTimeWeightedAverage(OracleAverageQuery[] memory queries)
-        external
-        view
-        returns (uint256[] memory results);
-
-    enum Variable {
-        PAIR_PRICE,
-        BPT_PRICE,
-        INVARIANT
-    }
-    struct OracleAverageQuery {
-        Variable variable;
-        uint256 secs;
-        uint256 ago;
-    }
-
-    function getSample(uint256 index)
-        external
-        view
-        returns (
-            int256 logPairPrice,
-            int256 accLogPairPrice,
-            int256 logBptPrice,
-            int256 accLogBptPrice,
-            int256 logInvariant,
-            int256 accLogInvariant,
-            uint256 timestamp
-        );
-
     function getPoolId() external view returns (bytes32);
-    function getVault() external view returns (address);
+    // function getVault() external view returns (address);
     function totalSupply() external view returns (uint256);
     function pti() external view returns (uint256);
-    function ts() external view returns (uint256);
-    function g1() external view returns (uint256);
-    function g2() external view returns (uint256);
-    function maturity() external view returns (uint256);
+    // function ts() external view returns (uint256);
+    // function maturity() external view returns (uint256);
     
     struct SwapRequest {
         BalancerVault.SwapKind kind;
@@ -66,10 +35,27 @@ interface Space {
     view // This is a lie. But it indeed will only mutate storage if called by the Balancer Vault, so it's true for our purposes here.
     returns (uint256);
 
-    function getIndices() external view returns (uint256 pti, uint256 targeti);
     function balanceOf(address user) external view returns (uint256 amount);
     function getPriceFromImpliedRate(uint256 impliedRate) external view returns (uint256 pTPriceInTarget);
     
-    function getTotalSamples() external view returns (uint256);
-    function getLargestSafeQueryWindow() external view returns (uint256);
+    function getEQReserves(
+        uint256 stretchedRate,
+        uint256 maturity,
+        uint256 ptReserves,
+        uint256 targetReserves,
+        uint256 totalSupply
+    ) external view returns (
+        uint256 eqPTReserves,
+        uint256 eqTargetReserves
+    );
+
+    function onSwapPreview(
+        bool ptIn,
+        bool givenIn,
+        uint256 amountDelta,
+        uint256 reservesTokenIn,
+        uint256 reservesTokenOut,
+        uint256 totalSupply,
+        uint256 scale
+    ) external view returns (uint256);
 }

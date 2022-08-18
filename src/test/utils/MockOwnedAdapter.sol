@@ -7,12 +7,17 @@ import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { Trust } from "sense-v1-utils/Trust.sol";
 import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
 
-import { AutoRoller, SpaceFactoryLike, OwnableAdapter } from "../../AutoRoller.sol";
+import { AutoRoller, SpaceFactoryLike } from "../../AutoRoller.sol";
 
 interface Opener {
     function onSponsorWindowOpened() external;
 }
 
+abstract contract OwnableAdapter is BaseAdapter {
+    function openSponsorWindow() external virtual {
+        Opener(msg.sender).onSponsorWindowOpened();
+    }
+}
 contract MockAdapter is OwnableAdapter, Trust{
     uint256 public override scale = 1.1e18;
     uint256 internal open = 1;
