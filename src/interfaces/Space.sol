@@ -7,11 +7,8 @@ import { BalancerVault } from "./BalancerVault.sol";
 
 interface Space {
     function getPoolId() external view returns (bytes32);
-    // function getVault() external view returns (address);
     function totalSupply() external view returns (uint256);
     function pti() external view returns (uint256);
-    // function ts() external view returns (uint256);
-    // function maturity() external view returns (uint256);
     
     struct SwapRequest {
         BalancerVault.SwapKind kind;

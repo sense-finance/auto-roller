@@ -64,7 +64,6 @@ contract AutoRoller is ERC4626 {
     error InsufficientLiquidity();
     error RollWindowNotOpen();
     error OnlyAdapter();
-    error SeriesNotSettled();
 
     /* ========== CONSTANTS ========== */
 
@@ -107,6 +106,7 @@ contract AutoRoller is ERC4626 {
     uint16 internal targetDuration = 3;
     uint32 internal cooldown       = 10 days;
     uint32 internal lastSettle;
+    
 
     constructor(
         ERC20 _target,
@@ -273,7 +273,7 @@ contract AutoRoller is ERC4626 {
 
     // Enter a cooldown phase where users can redeem without slippage.
     function startCooldown() public {
-        if (divider.mscale(address(adapter), maturity) == 0) revert SeriesNotSettled();
+        require(divider.mscale(address(adapter), maturity) != 0);
 
         (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
 
@@ -289,23 +289,6 @@ contract AutoRoller is ERC4626 {
     }
 
     /* ========== 4626 ========== */
-
-    // function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
-    //     if (maturity != MATURITY_NOT_SET) _emptyJoin();
-    //     return super.deposit(assets, receiver);
-    // }
-    // function mint(uint256 shares, address receiver) public override returns (uint256 assets) {
-    //     if (maturity != MATURITY_NOT_SET) _emptyJoin();
-    //     return super.mint(shares, receiver);
-    // }
-    // function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
-    //     if (maturity != MATURITY_NOT_SET) _emptyJoin();
-    //     return super.withdraw(assets, receiver, owner);
-    // }
-    // function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
-    //     if (maturity != MATURITY_NOT_SET) _emptyJoin(); // These are unfortunate as we have to pay this extra gas just to update pool fee accounting.
-    //     return super.redeem(shares, receiver, owner);
-    // }
 
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
