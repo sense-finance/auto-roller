@@ -49,9 +49,6 @@ interface AdapterLike {
     function scaleStored() external view returns (uint256);
 }
 
-// size saving potential:
-// * make libraries external contracts
-
 contract AutoRoller is ERC4626 {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
@@ -106,7 +103,6 @@ contract AutoRoller is ERC4626 {
     uint16 internal targetDuration = 3;
     uint32 internal cooldown       = 10 days;
     uint32 internal lastSettle;
-    
 
     constructor(
         ERC20 _target,
@@ -357,7 +353,7 @@ contract AutoRoller is ERC4626 {
         else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
             
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, true);
 
             uint256 ptSpotPrice = space.getPriceFromImpliedRate(
                 (ptReserves + space.totalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - 1e18
@@ -399,7 +395,7 @@ contract AutoRoller is ERC4626 {
         } else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetToJoin, uint256 ptsToJoin, , ) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetToJoin, uint256 ptsToJoin, , ) = _decomposeShares(ptReserves, targetReserves, shares, true);
 
             return targetToJoin + ptsToJoin.divWadUp(adapter.scaleStored().mulWadDown(1e18 - ifee)); // targetToJoin + targetToIssue
         }
@@ -412,13 +408,19 @@ contract AutoRoller is ERC4626 {
         } else {
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, false);
 
             uint256 scale = adapter.scaleStored();
 
-            ptReserves = ptReserves + pt.balanceOf(address(this)) - ptBal;
-            targetReserves = targetReserves + asset.balanceOf(address(this)) - targetBal;
-            uint256 spaceSupply = space.totalSupply() - lpBal;
+            ptReserves     = ptReserves - ptBal;
+            targetReserves = targetReserves - targetBal;
+
+            uint256 spaceSupply = space.totalSupply();
+
+            // Adjust balances for loose asset share.
+            ptBal = ptBal + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
+            targetBal = targetBal + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
+            spaceSupply = spaceSupply - lpBal;
 
             if (ptBal >= ytBal) {
                 unchecked {
@@ -453,7 +455,7 @@ contract AutoRoller is ERC4626 {
                     //         shares must be lte total supply, so ptReserves & targetReserves wil always be gte ptBal & targetBal.
 
                     // If there isn't enough liquidity to sell all of the YTs, sell the max that we can and ignore the remaining YTs.
-                    uint256 ytsToSell = _min(ytBal - ptBal, ptReserves - ptBal);
+                    uint256 ytsToSell = _min(ytBal - ptBal, ptReserves);
 
                     // Target from combining YTs with PTs - target needed to buy PTs.
                     uint256 targetOut = ytsToSell > minSwapAmount ? 
@@ -533,7 +535,7 @@ contract AutoRoller is ERC4626 {
 
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, true);
 
             bool isExcessPTs = ptBal > ytBal;
             uint256 diff = isExcessPTs ? ptBal - ytBal : ytBal - ptBal;
@@ -700,7 +702,7 @@ contract AutoRoller is ERC4626 {
 
     /// @dev Decompose shares works to break shares into their constituent parts, 
     ///      and also preview the assets required to mint a given number of shares.
-    function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares)
+    function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares, bool withLoose)
         internal view returns (uint256, uint256, uint256, uint256)
     {
         uint256 supply      = totalSupply;
@@ -709,8 +711,8 @@ contract AutoRoller is ERC4626 {
 
         // Shares have a right to a portion of the PTs/asset floating around unencombered in this contract.
         return (
-            shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply) + asset.balanceOf(address(this)), supply),
-            shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply) + pt.balanceOf(address(this)), supply),
+            shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply) + (withLoose ? asset.balanceOf(address(this)) : 0), supply),
+            shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply) + (withLoose ? pt.balanceOf(address(this)) : 0), supply),
             shares.mulDivUp(yt.balanceOf(address(this)), supply),
             shares.mulDivUp(totalLPBal, supply)
         );
