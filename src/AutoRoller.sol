@@ -501,7 +501,7 @@ contract AutoRoller is ERC4626 {
 
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
-                if (answer >= 0 && answer <= 1e16 || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
+                if (answer >= 0 && answer <= assets.mulWadDown(0.001e18) || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
                     break;
                 }
 
@@ -681,6 +681,10 @@ contract AutoRoller is ERC4626 {
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a <= b ? a : b;
+    }
+
+    function _max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a >= b ? a : b;
     }
 
     /* ========== INTERNAL VIEWS ========== */
