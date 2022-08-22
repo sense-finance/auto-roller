@@ -605,7 +605,7 @@ contract AutoRoller is ERC4626 {
     /* ========== GENERAL UTILS ========== */
 
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
-        uint256 supply = totalSupply;
+        uint256 supply = totalSupply; // Save extra SLOAD.
 
         uint256 lpBal = shares.mulDivDown(space.balanceOf(address(this)), supply);
 
@@ -631,7 +631,7 @@ contract AutoRoller is ERC4626 {
             if (ptBal > ytBal) {
                 divider.combine(address(adapter), maturity, ytBal);
                 return (ptBal - ytBal, true);
-            } else { // Set excess PTs to falase if the balances are exactly equal.
+            } else { // Set excess PTs to false if the balances are exactly equal.
                 divider.combine(address(adapter), maturity, ptBal);
                 return (ytBal - ptBal, false);
             }
