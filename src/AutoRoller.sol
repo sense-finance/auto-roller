@@ -189,7 +189,7 @@ contract AutoRoller is ERC4626 {
 
         uint256 targetBal = asset.balanceOf(address(this));
 
-        (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
+        (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEqReserves(
             targetedRate,
             nextMaturity,
             0,
@@ -501,7 +501,7 @@ contract AutoRoller is ERC4626 {
 
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
-                if (answer >= 0 && answer <= assets.mulWadDown(0.001e18) || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
+                if (answer >= 0 && answer <= assets.mulWadDown(0.001e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
                     break;
                 }
 
@@ -607,7 +607,9 @@ contract AutoRoller is ERC4626 {
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
         uint256 supply = totalSupply; // Save extra SLOAD.
 
-        uint256 lpBal = shares.mulDivDown(space.balanceOf(address(this)), supply);
+        uint256 lpBal      = shares.mulDivDown(space.balanceOf(address(this)), supply);
+        uint256 totalPTBal = pt.balanceOf(address(this));
+        uint256 ptShare    = shares.mulDivDown(totalPTBal, supply);
 
         ERC20[] memory tokens = new ERC20[](2);
         tokens[1 - pti] = asset;
@@ -624,16 +626,16 @@ contract AutoRoller is ERC4626 {
         );
 
         uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
-        uint256 ptBal = pt.balanceOf(address(this)); // All PTs currently in this contract (exited PTs + loose dust PTs).
+        ptShare = ptShare + pt.balanceOf(address(this)) - totalPTBal;
 
         unchecked {
             // Safety: an inequality check is done before subtraction.
-            if (ptBal > ytBal) {
+            if (ptShare > ytBal) {
                 divider.combine(address(adapter), maturity, ytBal);
-                return (ptBal - ytBal, true);
+                return (ptShare - ytBal, true);
             } else { // Set excess PTs to false if the balances are exactly equal.
                 divider.combine(address(adapter), maturity, ptBal);
-                return (ytBal - ptBal, false);
+                return (ytBal - ptShare, false);
             }
         }
     }
@@ -725,7 +727,7 @@ contract AutoRoller is ERC4626 {
     /* ========== SPACE POOL SOLVERS ========== */
 
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
-        (uint256 eqPTReserves, ) = space.getEQReserves(
+        (uint256 eqPTReserves, ) = space.getEqReserves(
             maxRate, // Max acceptable implied rate.
             maturity,
             ptReserves,
