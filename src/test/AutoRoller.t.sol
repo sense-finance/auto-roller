@@ -36,6 +36,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     MockERC20 target;
     MockERC20 underlying;
     MockAdapter mockAdapter;
+    Utils utils;
 
     SpaceFactoryLike spaceFactory;
     BalancerVault balancerVault;
@@ -82,7 +83,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             mockAdapterParams
         );
 
-        Utils utils = new Utils();
+        utils = new Utils();
 
         autoRoller = new AutoRoller(
             target,
@@ -91,7 +92,9 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             address(spaceFactory),
             address(balancerVault),
             AdapterLike(address(mockAdapter)),
-            utils
+            utils,
+            2.9e18,
+            3
         );
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
@@ -139,10 +142,23 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
     function testFuzzRoll(uint88 targetedRate) public {
         targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 50000e18));
-        emit log_uint(targetedRate);
 
-        // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
-        autoRoller.setParam("TARGETED_RATE", targetedRate);
+        // 1. Set a fuzzed fallback rate on a new auto roller.
+        AutoRoller autoRoller = new AutoRoller(
+            target,
+            DividerLike(address(divider)),
+            address(periphery),
+            address(spaceFactory),
+            address(balancerVault),
+            AdapterLike(address(mockAdapter)),
+            utils,
+            targetedRate,
+            3
+        );
+
+        target.approve(address(autoRoller), 2e18);
+        
+        mockAdapter.setIsTrusted(address(autoRoller), true);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();

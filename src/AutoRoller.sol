@@ -114,7 +114,9 @@ contract AutoRoller is ERC4626 {
         address _spaceFactory,
         address _balancerVault,
         AdapterLike _adapter,
-        Utils _utils
+        Utils _utils,
+        uint88 _targetedRate,
+        uint16 _targetDuration
     ) ERC4626(
         _target,
         string(abi.encodePacked(_target.name(), " Sense Auto Roller")),
@@ -141,6 +143,8 @@ contract AutoRoller is ERC4626 {
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
         owner   = msg.sender;
         utils   = _utils;
+        targetedRate = _targetedRate;
+        targetDuration = _targetDuration;
     }
 
     /* ========== SERIES MANAGEMENT ========== */
@@ -199,7 +203,7 @@ contract AutoRoller is ERC4626 {
             0,
             targetBal,
             targetBal.mulWadDown(scale),
-            space.g2()
+            _space.g2()
         );
 
         uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, scale);
@@ -760,7 +764,10 @@ contract AutoRoller is ERC4626 {
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = uint88(data);
-        else if (what == "TARGETED_RATE") targetedRate = uint88(data);
+        else if (what == "TARGETED_RATE") {
+            require(lastSettle != 0 && lastSettle + cooldown >= block.timestamp - 1 days);
+            targetedRate = uint88(data);
+        }
         else if (what == "TARGET_DURATION") targetDuration = uint16(data);
         else if (what == "COOLDOWN") cooldown = uint32(data);
         else revert UnrecognizedParam(what);
