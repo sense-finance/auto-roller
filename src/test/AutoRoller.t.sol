@@ -157,7 +157,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         );
 
         target.approve(address(autoRoller), 2e18);
-        
+
         mockAdapter.setIsTrusted(address(autoRoller), true);
 
         // 2. Roll Target into the first Series.
@@ -206,12 +206,10 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // 3. Eject everything.
         ( , uint256 excessBal, bool isExcessPTs) = autoRoller.eject(autoRoller.balanceOf(address(this)), address(this), address(this));
 
-        // Expect a little YT excess.
+        // Expect just a little YT excess.
         assertBoolEq(isExcessPTs, false);
-        assertGt(excessBal, 1e6);
         assertLt(excessBal, 1e16);
         assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
-        assertTrue(false);
     }
 
     function testCooldown() public {
@@ -330,7 +328,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         target.approve(address(autoRoller), assets);
 
         vm.prank(alice);
-        uint256 aliceTargetAmount = autoRoller.deposit(assets, alice);
+        autoRoller.deposit(assets, alice);
 
         uint256 maxWithdraw = autoRoller.maxWithdraw(alice);
         assertRelApproxEq(maxWithdraw, assets, 0.001e18 /* 0.1% */);
