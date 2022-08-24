@@ -429,8 +429,8 @@ contract AutoRoller is ERC4626 {
             uint256 spaceSupply = space.totalSupply();
 
             // Adjust balances for loose asset share.
-            ptBal = ptBal + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
-            targetBal = targetBal + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
+            ptBal       = ptBal + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
+            targetBal   = targetBal + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
             spaceSupply = spaceSupply - lpBal;
 
             if (ptBal >= ytBal) {
@@ -769,7 +769,10 @@ contract AutoRoller is ERC4626 {
             targetedRate = uint88(data);
         }
         else if (what == "TARGET_DURATION") targetDuration = uint16(data);
-        else if (what == "COOLDOWN") cooldown = uint32(data);
+        else if (what == "COOLDOWN") {
+            require(lastSettle == 0 || maturity != MATURITY_NOT_SET); // Can't update cooldown during cooldown period.
+            cooldown = uint32(data);
+        }
         else revert UnrecognizedParam(what);
         emit ParamChanged(what, data);
     }
