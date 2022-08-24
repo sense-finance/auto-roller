@@ -1,13 +1,13 @@
-[default]
+[profile.default]
 src = 'src'
 out = 'out'
 test = 'src/test'
 libs = ['lib', 'lib/space-v1/lib/','lib/sense-v1/node_modules/']
 verbosity = 3
-eth-rpc-url = "https://eth-mainnet.alchemyapi.io/v2/JrCVyH87AyAZaGXaIaxhWce4x-JqR7z-"
+eth-rpc-url = "https://eth-goerli.alchemyapi.io/v2/JrCVyH87AyAZaGXaIaxhWce4x-JqR7z-"
 optimizer_runs = 20
-# Block mined at Fri May 24 2022 06:30:37 +UTC
-fork_block_number = 14837243
+# Block mined at Wed Aug 24 2022 05:42:00 AM +UTC
+fork_block_number = 7462015
 remappings = [
     'ds-test/=lib/ds-test/src/',
     'sense-v1-core/=lib/sense-v1/pkg/core/src/',

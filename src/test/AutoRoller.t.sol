@@ -21,8 +21,7 @@ import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
 import { MockAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
-import { AutoRoller, SpaceFactoryLike } from "../AutoRoller.sol";
-
+import { AutoRoller, Utils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
 
 contract AutoRollerTest is DSTestPlus, stdCheats {
     using FixedPointMathLib for uint256;
@@ -83,7 +82,17 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             mockAdapterParams
         );
 
-        autoRoller = new AutoRoller(target, divider, address(periphery), address(spaceFactory), address(balancerVault), mockAdapter);
+        Utils utils = new Utils();
+
+        autoRoller = new AutoRoller(
+            target,
+            DividerLike(address(divider)),
+            address(periphery),
+            address(spaceFactory),
+            address(balancerVault),
+            AdapterLike(address(mockAdapter)),
+            utils
+        );
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
 
@@ -105,22 +114,22 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         // 1. Impersonate the fuzzed address and try to update admin params
         vm.startPrank(lad);
-        vm.expectRevert("UNTRUSTED");
+        vm.expectRevert();
         autoRoller.setParam("SPACE_FACTORY", address(0xbabe));
 
-        vm.expectRevert("UNTRUSTED");
+        vm.expectRevert();
         autoRoller.setParam("PERIPHERY", address(0xbabe));
 
-        vm.expectRevert("UNTRUSTED");
+        vm.expectRevert();
         autoRoller.setParam("MAX_RATE", 1337);
 
-        vm.expectRevert("UNTRUSTED");
-        autoRoller.setParam("TARGET_RATE", 1337);
+        vm.expectRevert();
+        autoRoller.setParam("TARGETED_RATE", 1337);
 
-        vm.expectRevert("UNTRUSTED");
+        vm.expectRevert();
         autoRoller.setParam("TARGET_DURATION", 1337);
 
-        vm.expectRevert("UNTRUSTED");
+        vm.expectRevert();
         autoRoller.setParam("COOLDOWN", 1337);
 
         (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
@@ -129,10 +138,11 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     }
 
     function testFuzzRoll(uint88 targetedRate) public {
-        targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 2e18));
+        targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 50000e18));
+        emit log_uint(targetedRate);
 
         // 1. Set a fuzzed fallback rate, which will be used when there is no oracle available.
-        autoRoller.setParam("TARGET_RATE", targetedRate);
+        autoRoller.setParam("TARGETED_RATE", targetedRate);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();
@@ -148,10 +158,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         uint256 stretchedImpliedRate = (balances[pti] + space.totalSupply())
             .divWadDown(balances[1 - pti].mulWadDown(mockAdapter.scale())) - 1e18;
 
-        uint256 impliedRate = _powWad(stretchedImpliedRate + 1e18, space.ts().mulWadDown(SECONDS_PER_YEAR * 1e18)) - 1e18;
-
-        // Check that the actual implied rate in the pool is close the fallback rate.
-        assertRelApproxEq(impliedRate, targetedRate, 0.0001e18 /* 0.01% */);
+        // Check that the actual stretched implied rate in the pool is close the targeted rate.
+        assertRelApproxEq(stretchedImpliedRate, targetedRate, 0.0001e18 /* 0.01% */);
     }
 
     function testRoll() public {
@@ -169,7 +177,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         // Sanity checks
         Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
         assertTrue(address(space) != address(0));
-        assertLt(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
+        assertLt(autoRoller.maturity(), type(uint32).max);
     }
 
     function testEject() public {
@@ -186,11 +194,13 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertBoolEq(isExcessPTs, false);
         assertGt(excessBal, 1e6);
         assertLt(excessBal, 1e16);
-        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
-        assertEq(excessBal, yt.balanceOf(address(this)));
+        assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
+        assertTrue(false);
     }
 
     function testCooldown() public {
+        uint256 cooldown = 10 days;
+        autoRoller.setParam("COOLDOWN", cooldown);
         autoRoller.roll();
 
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
@@ -203,7 +213,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
         autoRoller.roll();
 
-        vm.warp(maturity + autoRoller.cooldown());
+        vm.warp(maturity + cooldown);
 
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
         autoRoller.roll();
@@ -215,7 +225,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
         autoRoller.roll();
 
-        vm.warp(maturity + autoRoller.cooldown());
+        vm.warp(maturity + cooldown);
         autoRoller.roll();
     }
 
@@ -273,7 +283,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertEq(pt.balanceOf(address(autoRoller)), 0);
         assertEq(yt.balanceOf(address(autoRoller)), 0);
 
-        assertEq(autoRoller.maturity(), autoRoller.MATURITY_NOT_SET());
+        assertEq(autoRoller.maturity(), type(uint32).max);
     }
 
     function testSponsorshipWindow() public {
@@ -572,3 +582,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }
+
+// todo: relative answer check
+// todo: confirm that you can't take asset tokens with settle
+// todo: decimals
+// todo: set balancer protocol fees

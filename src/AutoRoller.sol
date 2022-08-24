@@ -47,6 +47,7 @@ interface AdapterLike {
     function openSponsorWindow() external;
     function scale() external view returns (uint256);
     function scaleStored() external view returns (uint256);
+    function getStakeAndTarget() external view returns (address,address,uint256);
 }
 
 contract AutoRoller is ERC4626 {
@@ -61,13 +62,13 @@ contract AutoRoller is ERC4626 {
     error InsufficientLiquidity();
     error RollWindowNotOpen();
     error OnlyAdapter();
+    error InvalidSettler();
 
     /* ========== CONSTANTS ========== */
 
     uint32  internal constant MATURITY_NOT_SET = type(uint32).max;
 
     int256  internal constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
-    uint256 internal constant SECONDS_PER_YEAR = 31536000;
 
     /* ========== IMMUTABLES ========== */
 
@@ -92,14 +93,16 @@ contract AutoRoller is ERC4626 {
     ERC20   internal pt;
     Space   internal space;
     bytes32 internal poolId;
+    address public lastRoller;
+
     // Packed slot 1
     uint216 internal initScale;
     uint32  public maturity = MATURITY_NOT_SET;
     uint8   public pti;
 
     // Packed slot 2
-    uint88 internal maxRate        = 2e18;    // Max implied rate stretched to Space pool's TS period.
-    uint88 internal targetedRate   = 0.12e18; // Targeted implied rate stretched to Space pool's TS period.
+    uint88 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
+    uint88 internal targetedRate   = 2.9e18; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
     uint16 internal targetDuration = 3;
     uint32 internal cooldown       = 10 days;
     uint32 internal lastSettle;
@@ -155,17 +158,18 @@ contract AutoRoller is ERC4626 {
         }
 
         adapter.openSponsorWindow();
+        lastRoller = msg.sender;
     }
 
     function onSponsorWindowOpened() external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
-        // (, address stake, uint256 stakeSize) = adapter.getStakeAndTarget();
+        (, address stake, uint256 stakeSize) = adapter.getStakeAndTarget();
 
-        // ERC20(stake).safeTransferFrom(msg.sender, address(this), stakeSize);
+        ERC20(stake).safeTransferFrom(msg.sender, address(this), stakeSize);
 
         // Allow the Periphery to move stake for sponsoring the Series.
-        // ERC20(stake).approve(address(periphery), stakeSize);
+        ERC20(stake).approve(address(periphery), stakeSize);
 
         uint256 nextMaturity = utils.getFutureTopMonth(targetDuration);
 
@@ -189,12 +193,13 @@ contract AutoRoller is ERC4626 {
 
         uint256 targetBal = asset.balanceOf(address(this));
 
-        (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEqReserves(
+        (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
             targetedRate,
             nextMaturity,
             0,
             targetBal,
-            targetBal.mulWadDown(scale)
+            targetBal.mulWadDown(scale),
+            space.g2()
         );
 
         uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, scale);
@@ -253,16 +258,18 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Settle the active Series and enter a cooldown phase.
     function settle() public {
+        if(msg.sender != lastRoller) revert InvalidSettler();
+
         uint256 assetBalPre = asset.balanceOf(address(this));
         divider.settleSeries(address(adapter), maturity); // Settlement will fail if maturity hasn't been reached.
         uint256 assetBalPost = asset.balanceOf(address(this));
 
-        asset.safeTransfer(msg.sender, assetBalPost - assetBalPre); // Send settlement reward to the sender.
+        asset.safeTransfer(msg.sender, assetBalPost - assetBalPre); // Send issuance fees to the sender.
 
-        // (, address stake, uint256 stakeSize) = Adapter(adapter).getStakeAndTarget();
-        // if (stake != address(asset)) {
-        //     ERC20(stake).safeTransfer(msg.sender, stakeSize);
-        // }
+        (, address stake, uint256 stakeSize) = adapter.getStakeAndTarget();
+        if (stake != address(asset)) {
+            ERC20(stake).safeTransfer(msg.sender, stakeSize);
+        }
 
         startCooldown();
     }
@@ -634,7 +641,7 @@ contract AutoRoller is ERC4626 {
                 divider.combine(address(adapter), maturity, ytBal);
                 return (ptShare - ytBal, true);
             } else { // Set excess PTs to false if the balances are exactly equal.
-                divider.combine(address(adapter), maturity, ptBal);
+                divider.combine(address(adapter), maturity, ptShare);
                 return (ytBal - ptShare, false);
             }
         }
@@ -727,12 +734,13 @@ contract AutoRoller is ERC4626 {
     /* ========== SPACE POOL SOLVERS ========== */
 
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
-        (uint256 eqPTReserves, ) = space.getEqReserves(
+        (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
             maturity,
             ptReserves,
             targetReserves,
-            spaceSupply
+            spaceSupply,
+            initScale
         );
 
         return ptReserves >= eqPTReserves ? 0 : eqPTReserves - ptReserves; // Edge case: the pool is already above the max rate.
@@ -752,7 +760,7 @@ contract AutoRoller is ERC4626 {
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = uint88(data);
-        else if (what == "TARGET_RATE") targetedRate = uint88(data);
+        else if (what == "TARGETED_RATE") targetedRate = uint88(data);
         else if (what == "TARGET_DURATION") targetDuration = uint16(data);
         else if (what == "COOLDOWN") cooldown = uint32(data);
         else revert UnrecognizedParam(what);

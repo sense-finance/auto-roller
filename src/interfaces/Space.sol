@@ -9,6 +9,8 @@ interface Space {
     function getPoolId() external view returns (bytes32);
     function totalSupply() external view returns (uint256);
     function pti() external view returns (uint256);
+    function ts() external view returns (uint256);
+    function g2() external view returns (uint256);
     
     struct SwapRequest {
         BalancerVault.SwapKind kind;
@@ -40,7 +42,8 @@ interface Space {
         uint256 maturity,
         uint256 ptReserves,
         uint256 targetReserves,
-        uint256 totalSupply
+        uint256 totalSupply,
+        uint256 initScale
     ) external view returns (
         uint256 eqPTReserves,
         uint256 eqTargetReserves
