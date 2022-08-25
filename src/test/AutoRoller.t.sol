@@ -23,6 +23,15 @@ import { MockAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
 import { AutoRoller, Utils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
 
+interface Authentication {
+    function getActionId(bytes4) external returns (bytes32);
+    function grantRole(bytes32,address) external;
+}
+
+interface ProtocolFeesController {
+    function setSwapFeePercentage(uint256) external;
+}
+
 contract AutoRollerTest is DSTestPlus, stdCheats {
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int128;
@@ -94,7 +103,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             AdapterLike(address(mockAdapter)),
             utils,
             2.9e18,
-            3
+            3,
+            address(1)
         );
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
@@ -107,6 +117,15 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
         target.mint(address(this), 2e18);
         target.approve(address(autoRoller), 2e18);
+
+        // Set protocol fees
+        vm.startPrank(AddressBook.SENSE_DEPLOYER);
+        ProtocolFeesController protocolFeesCollector = ProtocolFeesController(balancerVault.getProtocolFeesCollector());
+        Authentication authorizer = Authentication(balancerVault.getAuthorizer());
+        bytes32 actionId = Authentication(address(protocolFeesCollector)).getActionId(protocolFeesCollector.setSwapFeePercentage.selector);
+        authorizer.grantRole(actionId, address(this));
+        vm.stopPrank();
+        protocolFeesCollector.setSwapFeePercentage(0.1e18);
     }
 
     // Auth
@@ -153,7 +172,8 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             AdapterLike(address(mockAdapter)),
             utils,
             targetedRate,
-            3
+            3,
+            address(1)
         );
 
         target.approve(address(autoRoller), 2e18);
@@ -601,3 +621,4 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 // todo: confirm that you can't take asset tokens with settle
 // todo: decimals
 // todo: set balancer protocol fees
+// todo: coverage

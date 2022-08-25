@@ -36,6 +36,7 @@ interface Space {
 
     function balanceOf(address user) external view returns (uint256 amount);
     function getPriceFromImpliedRate(uint256 impliedRate) external view returns (uint256 pTPriceInTarget);
+    function adjustedTotalSupply() external view returns (uint256 supply);
     
     function getEQReserves(
         uint256 stretchedRate,

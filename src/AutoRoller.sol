@@ -4,7 +4,9 @@ pragma solidity 0.8.11;
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
+import { ReentrancyGuard } from "solmate/utils/ReentrancyGuard.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
+
 import { DateTime } from "./external/DateTime.sol";
 
 import { Trust } from "sense-v1-utils/Trust.sol";
@@ -50,7 +52,7 @@ interface AdapterLike {
     function getStakeAndTarget() external view returns (address,address,uint256);
 }
 
-contract AutoRoller is ERC4626 {
+contract AutoRoller is ERC4626, ReentrancyGuard {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using SafeCast for *;
@@ -80,6 +82,7 @@ contract AutoRoller is ERC4626 {
     uint256 internal immutable minSwapAmount;
     uint256 internal immutable firstDeposit;
     uint256 internal immutable maxError; // A conservative buffer for "rounding" swap previews that accounts for compounded pow of imprecision.
+    address public immutable rewardRecipient;
 
     /* ========== MUTABLE STORAGE ========== */
 
@@ -116,7 +119,8 @@ contract AutoRoller is ERC4626 {
         AdapterLike _adapter,
         Utils _utils,
         uint88 _targetedRate,
-        uint16 _targetDuration
+        uint16 _targetDuration,
+        address _rewardRecipient
     ) ERC4626(
         _target,
         string(abi.encodePacked(_target.name(), " Sense Auto Roller")),
@@ -145,6 +149,7 @@ contract AutoRoller is ERC4626 {
         utils   = _utils;
         targetedRate = _targetedRate;
         targetDuration = _targetDuration;
+        rewardRecipient = _rewardRecipient;
     }
 
     /* ========== SERIES MANAGEMENT ========== */
@@ -165,7 +170,7 @@ contract AutoRoller is ERC4626 {
         lastRoller = msg.sender;
     }
 
-    function onSponsorWindowOpened() external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
+    function onSponsorWindowOpened() external nonReentrant { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
         (, address stake, uint256 stakeSize) = adapter.getStakeAndTarget();
@@ -261,7 +266,7 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Settle the active Series and enter a cooldown phase.
-    function settle() public {
+    function settle() public nonReentrant {
         if(msg.sender != lastRoller) revert InvalidSettler();
 
         uint256 assetBalPre = asset.balanceOf(address(this));
@@ -305,7 +310,7 @@ contract AutoRoller is ERC4626 {
 
             if (isExcessPTs) {
                 (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-                uint256 maxPTSale = _maxPTSell(ptReserves, targetReserves, space.totalSupply());
+                uint256 maxPTSale = _maxPTSell(ptReserves, targetReserves, space.adjustedTotalSupply());
 
                 if (excessBal > maxPTSale) revert InsufficientLiquidity(); // Need to eject, wait for more liquidity, or wait until a cooldown phase.
 
@@ -336,7 +341,7 @@ contract AutoRoller is ERC4626 {
             uint256 previewedLPBal = _supply - shares == 0 ?
                 shares : shares.mulDivUp(space.balanceOf(address(this)), _supply - shares); // _supply - shares b/c this is after minting new shares.
 
-            uint256 targetToJoin = previewedLPBal.mulDivUp(balances[1 - _pti], space.totalSupply());
+            uint256 targetToJoin = previewedLPBal.mulDivUp(balances[1 - _pti], space.adjustedTotalSupply());
 
             balances[1 - _pti] = targetToJoin;
 
@@ -367,7 +372,7 @@ contract AutoRoller is ERC4626 {
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, true);
 
             uint256 ptSpotPrice = space.getPriceFromImpliedRate(
-                (ptReserves + space.totalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - 1e18
+                (ptReserves + space.adjustedTotalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - 1e18
             ); // PT price in Target.
 
             uint256 scale = adapter.scaleStored();
@@ -393,7 +398,7 @@ contract AutoRoller is ERC4626 {
 
             // Calculate how much Target we'll end up joining the pool with, and use that to preview minted LP shares.
             uint256 previewedLPBal = (assets - _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored()))
-                .mulDivDown(space.totalSupply(), targetReserves);
+                .mulDivDown(space.adjustedTotalSupply(), targetReserves);
 
             // Shares represent proportional ownership of LP shares the vault holds.
             return previewedLPBal.mulDivDown(totalSupply, space.balanceOf(address(this)));
@@ -426,7 +431,7 @@ contract AutoRoller is ERC4626 {
             ptReserves     = ptReserves - ptBal;
             targetReserves = targetReserves - targetBal;
 
-            uint256 spaceSupply = space.totalSupply();
+            uint256 spaceSupply = space.adjustedTotalSupply();
 
             // Adjust balances for loose asset share.
             ptBal       = ptBal + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
@@ -552,7 +557,7 @@ contract AutoRoller is ERC4626 {
             uint256 diff = isExcessPTs ? ptBal - ytBal : ytBal - ptBal;
 
             if (isExcessPTs) {
-                uint256 maxPTSale = _maxPTSell(ptReserves - ptBal, targetReserves - targetBal, space.totalSupply() - lpBal);
+                uint256 maxPTSale = _maxPTSell(ptReserves - ptBal, targetReserves - targetBal, space.adjustedTotalSupply() - lpBal);
 
                 if (maxPTSale >= diff) {
                     // We have enough liquidity to handle the sale.
@@ -651,6 +656,12 @@ contract AutoRoller is ERC4626 {
         }
     }
 
+    function claimRewards(ERC20 coin) external {
+        require(coin != asset);
+        if (maturity != MATURITY_NOT_SET) require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
+        coin.transfer(rewardRecipient, coin.balanceOf(address(this)));
+    }
+
     /* ========== BALANCER UTILS ========== */
 
     function _joinPool(bytes32 _poolId, BalancerVault.JoinPoolRequest memory request) internal {
@@ -672,32 +683,10 @@ contract AutoRoller is ERC4626 {
         balancerVault.swap(request, funds, 0, type(uint256).max);
     }
 
-    function _emptyJoin() internal {
-        uint256[] memory balances = new uint256[](2);
-
-        ERC20[] memory tokens = new ERC20[](2);
-        tokens[1 - pti] = asset;
-        tokens[pti] = pt;
-
-        _joinPool(
-            poolId,
-            BalancerVault.JoinPoolRequest({
-                assets: tokens,
-                maxAmountsIn: balances,
-                userData: abi.encode(balances, 0),
-                fromInternalBalance: false
-            })
-        );
-    }
-
     /* ========== NUMERICAL UTILS ========== */
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a <= b ? a : b;
-    }
-
-    function _max(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a >= b ? a : b;
     }
 
     /* ========== INTERNAL VIEWS ========== */
@@ -724,7 +713,7 @@ contract AutoRoller is ERC4626 {
     {
         uint256 supply      = totalSupply;
         uint256 totalLPBal  = space.balanceOf(address(this));
-        uint256 spaceSupply = space.totalSupply();
+        uint256 spaceSupply = space.adjustedTotalSupply();
 
         // Shares have a right to a portion of the PTs/asset floating around unencombered in this contract.
         return (

@@ -11,8 +11,9 @@ library AddressBook {
 
     // Goerli
     address public constant SENSE_MULTISIG = 0x19f3bF5d7F8A58945DA80eaA4131DF2958f7AA4A;
+    address public constant SENSE_DEPLOYER = 0xF13519734649F7464E5BE4aa91987A35594b2B16;
     address public constant DIVIDER_1_2_0 = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
     address public constant PERIPHERY_1_3_0 = 0x876CaD23753F033E5308CFcc66E7608645527a9e;
-    address public constant SPACE_FACTORY_1_3_0 = 0x7bd1E36e265d257394F9599187a71D8923A5b33b;
+    address public constant SPACE_FACTORY_1_3_0 = 0x7A22b5E0CAdE97F2ab4982A780A3C1A293140312;
     address public constant BALANCER_VAULT = 0x1aB16CB0cb0e5520e0C081530C679B2e846e4D37;
 }
