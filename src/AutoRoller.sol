@@ -425,11 +425,11 @@ contract AutoRoller is ERC4626 {
             uint256 spaceSupply = space.adjustedTotalSupply();
 
             // Adjust balances for loose asset share.
-            ptBal       = ptBal + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
-            targetBal   = targetBal + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
+            ptBal       = ptBal       + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
+            targetBal   = targetBal   + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
             spaceSupply = spaceSupply - lpBal;
 
-            if (ptBal >= ytBal) {
+            if (ptBal > ytBal) {
                 unchecked {
                     // Safety: an inequality check is done before ptBal - ytBal.
                     //         shares must be lte total supply, so ptReserves & targetReserves wil always be gte ptBal & targetBal.
@@ -542,13 +542,22 @@ contract AutoRoller is ERC4626 {
 
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
-            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, true);
+            (uint256 targetBal, uint256 ptBal, uint256 ytBal, uint256 lpBal) = _decomposeShares(ptReserves, targetReserves, shares, false);
+
+            ptReserves     = ptReserves - ptBal;
+            targetReserves = targetReserves - targetBal;
+
+            uint256 spaceSupply = space.adjustedTotalSupply();
+
+            ptBal       = ptBal       + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
+            targetBal   = targetBal   + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
+            spaceSupply = spaceSupply - lpBal;
 
             bool isExcessPTs = ptBal > ytBal;
             uint256 diff = isExcessPTs ? ptBal - ytBal : ytBal - ptBal;
 
             if (isExcessPTs) {
-                uint256 maxPTSale = _maxPTSell(ptReserves - ptBal, targetReserves - targetBal, space.adjustedTotalSupply() - lpBal);
+                uint256 maxPTSale = _maxPTSell(ptReserves, targetReserves, spaceSupply);
 
                 if (maxPTSale >= diff) {
                     // We have enough liquidity to handle the sale.
