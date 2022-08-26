@@ -4,7 +4,6 @@ pragma solidity 0.8.11;
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
-import { ReentrancyGuard } from "solmate/utils/ReentrancyGuard.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 
 import { DateTime } from "./external/DateTime.sol";
@@ -40,19 +39,19 @@ interface PeripheryLike {
     function sponsorSeries(address, uint256, bool) external returns (ERC20, YTLike);
     function swapYTsForTarget(address, uint256, uint256) external returns (uint256);
     function create(address, uint256) external returns (address);
-    function pools(address, uint256) external view returns (Space);
+    function spaceFactory() external view returns (SpaceFactoryLike);
     function MIN_YT_SWAP_IN() external view returns (uint256);
 }
 
 interface AdapterLike {
     function ifee() external view returns (uint256);
     function openSponsorWindow() external;
-    function scale() external view returns (uint256);
+    function scale() external returns (uint256);
     function scaleStored() external view returns (uint256);
     function getStakeAndTarget() external view returns (address,address,uint256);
 }
 
-contract AutoRoller is ERC4626, ReentrancyGuard {
+contract AutoRoller is ERC4626 {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using SafeCast for *;
@@ -68,9 +67,8 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     /* ========== CONSTANTS ========== */
 
-    uint32  internal constant MATURITY_NOT_SET = type(uint32).max;
-
-    int256  internal constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
+    uint32 internal constant MATURITY_NOT_SET = type(uint32).max;
+    int256 internal constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
 
     /* ========== IMMUTABLES ========== */
 
@@ -82,33 +80,32 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     uint256 internal immutable minSwapAmount;
     uint256 internal immutable firstDeposit;
     uint256 internal immutable maxError; // A conservative buffer for "rounding" swap previews that accounts for compounded pow of imprecision.
-    address public immutable rewardRecipient;
+    address internal immutable rewardRecipient;
 
     /* ========== MUTABLE STORAGE ========== */
 
     PeripheryLike    internal periphery;
     SpaceFactoryLike internal spaceFactory;
     address          internal owner;
-    Utils            internal utils;
+    RollerUtils      internal utils;
 
     // Active Series
     YTLike  internal yt;
     ERC20   internal pt;
     Space   internal space;
     bytes32 internal poolId;
-    address public lastRoller;
+    address internal lastRoller;
 
-    // Packed slot 1
-    uint216 internal initScale;
-    uint32  public maturity = MATURITY_NOT_SET;
-    uint8   public pti;
+    // Separate slots to meet contract size limits.
+    uint256 internal initScale;
+    uint256 public  maturity = MATURITY_NOT_SET;
+    uint256 internal pti;
 
-    // Packed slot 2
-    uint88 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
-    uint88 internal targetedRate   = 2.9e18; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
-    uint16 internal targetDuration = 3;
-    uint32 internal cooldown       = 10 days;
-    uint32 internal lastSettle;
+    uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
+    uint256 internal targetedRate   = 2.9e18; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
+    uint256 internal targetDuration = 3; // Number of months or weeks in the future newly sponsored Series should mature.
+    uint256 internal cooldown       = 10 days;
+    uint256 internal lastSettle;
 
     constructor(
         ERC20 _target,
@@ -117,9 +114,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         address _spaceFactory,
         address _balancerVault,
         AdapterLike _adapter,
-        Utils _utils,
-        uint88 _targetedRate,
-        uint16 _targetDuration,
+        RollerUtils _utils,
         address _rewardRecipient
     ) ERC4626(
         _target,
@@ -147,8 +142,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
         owner   = msg.sender;
         utils   = _utils;
-        targetedRate = _targetedRate;
-        targetDuration = _targetDuration;
         rewardRecipient = _rewardRecipient;
     }
 
@@ -170,25 +163,19 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         lastRoller = msg.sender;
     }
 
-    function onSponsorWindowOpened() external nonReentrant { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
+    function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
-        (, address stake, uint256 stakeSize) = adapter.getStakeAndTarget();
-
-        ERC20(stake).safeTransferFrom(msg.sender, address(this), stakeSize);
+        stake.safeTransferFrom(msg.sender, address(this), stakeSize);
 
         // Allow the Periphery to move stake for sponsoring the Series.
-        ERC20(stake).approve(address(periphery), stakeSize);
+        stake.approve(address(periphery), stakeSize);
 
-        uint256 nextMaturity = utils.getFutureTopMonth(targetDuration);
+        uint256 _maturity = utils.getFutureMaturity(targetDuration);
 
         // Assign Series data.
-        (ERC20 _pt, YTLike _yt) = periphery.sponsorSeries(address(adapter), nextMaturity, true);
-        Space   _space      = spaceFactory.pools(address(adapter), nextMaturity);
-        bytes32 _poolId     = _space.getPoolId();
-
-        uint8   _pti  = uint8(_space.pti());
-        uint256 scale = adapter.scale();
+        (ERC20 _pt, YTLike _yt) = periphery.sponsorSeries(address(adapter), _maturity, true);
+        (Space _space, bytes32 _poolId, uint256 _pti, uint256 _initScale) = utils.getSpaceData(periphery, AdapterLike(msg.sender), _maturity);
 
         // Allow Balancer to move the new PTs for joins & swaps.
         _pt.approve(address(balancerVault), type(uint256).max);
@@ -196,23 +183,25 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         // Allow Periphery to move the new YTs for swaps.
         _yt.approve(address(periphery), type(uint256).max);
 
+        ERC20 _asset = asset;
+
         ERC20[] memory tokens = new ERC20[](2);
-        tokens[1 - _pti] = asset;
+        tokens[1 - _pti] = _asset;
         tokens[_pti] = _pt;
 
-        uint256 targetBal = asset.balanceOf(address(this));
+        uint256 targetBal = _asset.balanceOf(address(this));
 
         (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
             targetedRate,
-            nextMaturity,
+            _maturity,
             0,
             targetBal,
-            targetBal.mulWadDown(scale),
+            targetBal.mulWadDown(_initScale),
             _space.g2()
         );
 
-        uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, scale);
-        divider.issue(address(adapter), nextMaturity, targetForIssuance);
+        uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, _initScale);
+        divider.issue(address(adapter), _maturity, targetForIssuance);
 
         uint256[] memory balances = new uint256[](2);
         balances[1 - _pti] = targetBal - targetForIssuance;
@@ -239,7 +228,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         );
 
         balances[_pti    ] = _pt.balanceOf(address(this));
-        balances[1 - _pti] = asset.balanceOf(address(this));
+        balances[1 - _pti] = _asset.balanceOf(address(this));
 
         _joinPool(
             _poolId,
@@ -252,21 +241,21 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         );
 
         // Cache Series data.
-        space = _space;
+        space  = _space;
         poolId = _poolId;
         pt     = _pt;
         yt     = _yt;
 
         // Combined single SSTORE.
-        initScale = scale.safeCastTo216();
-        maturity  = uint32(nextMaturity); // OK until Feb 07, 2106
+        initScale = _initScale;
+        maturity  = _maturity; // OK until Feb 07, 2106
         pti       = _pti;
 
-        emit Rolled(nextMaturity, uint256(initScale), address(_space));
+        emit Rolled(_maturity, uint256(_initScale), address(_space), msg.sender);
     }
 
     /// @notice Settle the active Series and enter a cooldown phase.
-    function settle() public nonReentrant {
+    function settle() public {
         if(msg.sender != lastRoller) revert InvalidSettler();
 
         uint256 assetBalPre = asset.balanceOf(address(this));
@@ -367,12 +356,13 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             return asset.balanceOf(address(this));
         } 
         else {
+            Space _space = space;
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
             
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, true);
 
-            uint256 ptSpotPrice = space.getPriceFromImpliedRate(
-                (ptReserves + space.adjustedTotalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - 1e18
+            uint256 ptSpotPrice = _space.getPriceFromImpliedRate(
+                (ptReserves + _space.adjustedTotalSupply()).divWadDown(targetReserves.mulWadDown(initScale)) - 1e18
             ); // PT price in Target.
 
             uint256 scale = adapter.scaleStored();
@@ -394,14 +384,15 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewDeposit(assets);
         } else {
+            Space _space = space;
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
 
             // Calculate how much Target we'll end up joining the pool with, and use that to preview minted LP shares.
             uint256 previewedLPBal = (assets - _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored()))
-                .mulDivDown(space.adjustedTotalSupply(), targetReserves);
+                .mulDivDown(_space.adjustedTotalSupply(), targetReserves);
 
             // Shares represent proportional ownership of LP shares the vault holds.
-            return previewedLPBal.mulDivDown(totalSupply, space.balanceOf(address(this)));
+            return previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)));
         }
     }
 
@@ -595,11 +586,11 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     ) public returns (uint256 assets, uint256 excessBal, bool isExcessPTs) {
         if (maturity == MATURITY_NOT_SET) revert ActivePhaseOnly();
 
-        // if (msg.sender != owner) {
-        //     uint256 allowed = allowance[owner][msg.sender]; // Saves gas for limited approvals.
+        if (msg.sender != owner) {
+            uint256 allowed = allowance[owner][msg.sender]; // Saves gas for limited approvals.
 
-        //     if (allowed != type(uint256).max) allowance[owner][msg.sender] = allowed - shares;
-        // }
+            if (allowed != type(uint256).max) allowance[owner][msg.sender] = allowed - shares;
+        }
 
         (excessBal, isExcessPTs) = _exitAndCombine(shares);
 
@@ -635,7 +626,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             poolId,
             BalancerVault.ExitPoolRequest({
                 assets: tokens,
-                minAmountsOut: new uint256[](2), // No slippage protection here. It doesn't neatly fit in the 4626 standard, should we add it?
+                minAmountsOut: new uint256[](2),
                 userData: abi.encode(lpBal),
                 toInternalBalance: false
             })
@@ -658,7 +649,9 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     function claimRewards(ERC20 coin) external {
         require(coin != asset);
-        if (maturity != MATURITY_NOT_SET) require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
+        if (maturity != MATURITY_NOT_SET) {
+            require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
+        }
         coin.transfer(rewardRecipient, coin.balanceOf(address(this)));
     }
 
@@ -703,7 +696,8 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     function _getSpaceReserves() internal view returns (uint256, uint256) {
         (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
-        return (balances[pti], balances[1 - pti]);
+        uint256 _pti = pti;
+        return (balances[_pti], balances[1 - _pti]);
     }
 
     /// @dev Decompose shares works to break shares into their constituent parts, 
@@ -752,15 +746,15 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
-        if (what == "MAX_RATE") maxRate = uint88(data);
+        if (what == "MAX_RATE") maxRate = data;
         else if (what == "TARGETED_RATE") {
-            require(lastSettle != 0 && lastSettle + cooldown >= block.timestamp - 1 days);
-            targetedRate = uint88(data);
+            require(lastSettle == 0 || lastSettle + cooldown >= block.timestamp - 1 days);
+            targetedRate = data;
         }
-        else if (what == "TARGET_DURATION") targetDuration = uint16(data);
+        else if (what == "TARGET_DURATION") targetDuration = data;
         else if (what == "COOLDOWN") {
             require(lastSettle == 0 || maturity != MATURITY_NOT_SET); // Can't update cooldown during cooldown period.
-            cooldown = uint32(data);
+            cooldown = data;
         }
         else revert UnrecognizedParam(what);
         emit ParamChanged(what, data);
@@ -771,7 +765,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     event ParamChanged(bytes32 what, address newData);
     event ParamChanged(bytes32 what, uint256 newData);
 
-    event Rolled(uint256 nextMaturity, uint256 initScale, address space);
+    event Rolled(uint256 nextMaturity, uint256 initScale, address space, address roller);
     event Ejected(
         address indexed caller,
         address indexed receiver,
@@ -783,9 +777,16 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     );
 }
 
-contract Utils {
-    function getFutureTopMonth(uint256 monthsForward) public view returns (uint256) {
+contract RollerUtils {
+    function getFutureMaturity(uint256 monthsForward) public view returns (uint256) {
         (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, monthsForward));
         return DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
+    }
+
+    function getSpaceData(PeripheryLike periphery, AdapterLike adapter, uint256 nextMaturity)
+        public returns (Space, bytes32, uint256, uint256)
+    {
+        Space _space = periphery.spaceFactory().pools(address(adapter), nextMaturity);
+        return (_space, _space.getPoolId(), _space.pti(), adapter.scale());
     }
 }

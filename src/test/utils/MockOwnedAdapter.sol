@@ -10,15 +10,16 @@ import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
 import { AutoRoller, SpaceFactoryLike } from "../../AutoRoller.sol";
 
 interface Opener {
-    function onSponsorWindowOpened() external;
+    function onSponsorWindowOpened(address, uint256) external;
 }
 
 abstract contract OwnableAdapter is BaseAdapter {
     function openSponsorWindow() external virtual {
-        Opener(msg.sender).onSponsorWindowOpened();
+        Opener(msg.sender).onSponsorWindowOpened(address(0), 0);
     }
 }
-contract MockAdapter is OwnableAdapter, Trust{
+
+contract MockAdapter is OwnableAdapter, Trust {
     uint256 public override scale = 1.1e18;
     uint256 internal open = 1;
 
@@ -73,7 +74,7 @@ contract MockAdapter is OwnableAdapter, Trust{
 
     function openSponsorWindow() external override requiresTrust {
         open = 2;
-        Opener(msg.sender).onSponsorWindowOpened();
+        Opener(msg.sender).onSponsorWindowOpened(adapterParams.stake, adapterParams.stakeSize);
         open = 1;
     }
 

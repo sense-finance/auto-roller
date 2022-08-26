@@ -21,7 +21,7 @@ import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
 import { MockAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
-import { AutoRoller, Utils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
+import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
 
 interface Authentication {
     function getActionId(bytes4) external returns (bytes32);
@@ -45,7 +45,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     MockERC20 target;
     MockERC20 underlying;
     MockAdapter mockAdapter;
-    Utils utils;
+    RollerUtils utils;
 
     SpaceFactoryLike spaceFactory;
     BalancerVault balancerVault;
@@ -92,7 +92,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             mockAdapterParams
         );
 
-        utils = new Utils();
+        utils = new RollerUtils();
 
         autoRoller = new AutoRoller(
             target,
@@ -102,8 +102,6 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             address(balancerVault),
             AdapterLike(address(mockAdapter)),
             utils,
-            2.9e18,
-            3,
             address(1)
         );
 
@@ -171,10 +169,10 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             address(balancerVault),
             AdapterLike(address(mockAdapter)),
             utils,
-            targetedRate,
-            3,
             address(1)
         );
+
+        autoRoller.setParam("TARGETED_RATE", targetedRate);
 
         target.approve(address(autoRoller), 2e18);
 
@@ -191,7 +189,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
         uint256 pti = space.pti();
 
-        uint256 stretchedImpliedRate = (balances[pti] + space.totalSupply())
+        uint256 stretchedImpliedRate = (balances[pti] + space.adjustedTotalSupply())
             .divWadDown(balances[1 - pti].mulWadDown(mockAdapter.scale())) - 1e18;
 
         // Check that the actual stretched implied rate in the pool is close the targeted rate.
@@ -616,9 +614,3 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }
-
-// todo: relative answer check
-// todo: confirm that you can't take asset tokens with settle
-// todo: decimals
-// todo: set balancer protocol fees
-// todo: coverage
