@@ -6,8 +6,8 @@ libs = ['lib', 'lib/space-v1/lib/','lib/sense-v1/node_modules/']
 verbosity = 3
 eth-rpc-url = "https://eth-goerli.alchemyapi.io/v2/JrCVyH87AyAZaGXaIaxhWce4x-JqR7z-"
 optimizer_runs = 15
-# Block mined at Wed Aug 25 2022 05:42:00 AM +UTC
-fork_block_number = 7472205
+# Block mined at Wed Aug 26 2022 05:51:48 AM +UTC
+fork_block_number = 7473900
 remappings = [
     'ds-test/=lib/ds-test/src/',
     'sense-v1-core/=lib/sense-v1/pkg/core/src/',

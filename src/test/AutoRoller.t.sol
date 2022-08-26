@@ -596,6 +596,56 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
 
+    // FPS Audit SC.1 test
+
+    function testMintSandwich() public {
+        // 1. Large whale deposit from a third party (ensures sufficient liquidity later in the attack)
+        target.mint(address(this), 10e18);
+        target.approve(address(autoRoller), type(uint256).max);
+        autoRoller.deposit(10e18, alice);
+
+        // 2. Roll the Target into the first Series.
+        autoRoller.roll();
+
+        // 3. Deposit and PT donation (1st half of sandwich)
+        uint256 attackerOutflow = 0;
+        uint256 before = target.balanceOf(address(this));
+        autoRoller.deposit(1e18, address(this));
+        uint256 aafter = target.balanceOf(address(this));
+        attackerOutflow += before - aafter;
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
+        target.mint(address(this), 1e18);
+        target.approve(address(divider), 1e18);
+        before = target.balanceOf(address(this));
+        uint256 ptBal = pt.balanceOf(address(this));
+        uint256 ytBal = yt.balanceOf(address(this));
+        divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
+        aafter = target.balanceOf(address(this));
+        ptBal = pt.balanceOf(address(this)) - ptBal;  // ptBal is now just the PTs issued, in case there was any dust balance before
+        ytBal = yt.balanceOf(address(this)) - ytBal;  // same for ytBal; we'll convert these back to target at the end
+        attackerOutflow += before - aafter;
+        pt.transfer(address(autoRoller), ptBal);
+
+        // 3. Mint shares
+        address mintor = address(new Mintooor(autoRoller, target));
+        uint256 beforeBal = 5e18;  // mintor has more target than they intend to deposit
+        target.mint(mintor, beforeBal);
+        Mintooor(mintor).mint(0.5e18);
+        uint256 afterBal = target.balanceOf(mintor);
+
+        // 4. Redeem (2nd half of sandwich)
+        before = target.balanceOf(address(this));
+        autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
+        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        yt.approve(address(periphery), type(uint256).max);
+        periphery.swapYTsForTarget(address(mockAdapter), autoRoller.maturity(), ytBal);
+        aafter = target.balanceOf(address(this));
+        uint256 attackerInflow = aafter - before;
+        assertGt(attackerOutflow, attackerInflow);
+    }
+
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
             sender: address(this),
@@ -614,3 +664,15 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }
+
+contract Mintooor {
+    AutoRoller immutable roller;
+    constructor(AutoRoller _roller, MockERC20 target) {
+        roller = _roller;
+        target.approve(address(_roller), type(uint256).max);
+    }
+    function mint(uint256 shares) external {
+        roller.mint(shares, address(this));
+    }
+}
+
