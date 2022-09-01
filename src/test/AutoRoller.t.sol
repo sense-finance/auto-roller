@@ -2,7 +2,6 @@
 pragma solidity 0.8.11;
 
 import { Vm } from "forge-std/Vm.sol";
-import { stdCheats } from "forge-std/stdlib.sol";
 import { console } from "forge-std/console.sol";
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
@@ -19,7 +18,7 @@ import { Errors as SenseCoreErrors } from "sense-v1-utils/libs/Errors.sol";
 import { Space } from "../interfaces/Space.sol";
 import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
-import { MockAdapter } from "./utils/MockOwnedAdapter.sol";
+import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
 import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
 
@@ -32,7 +31,7 @@ interface ProtocolFeesController {
     function setSwapFeePercentage(uint256) external;
 }
 
-contract AutoRollerTest is DSTestPlus, stdCheats {
+contract AutoRollerTest is DSTestPlus {
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int128;
 
@@ -44,7 +43,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
 
     MockERC20 target;
     MockERC20 underlying;
-    MockAdapter mockAdapter;
+    MockOwnableAdapter mockAdapter;
     RollerUtils utils;
 
     SpaceFactoryLike spaceFactory;
@@ -57,7 +56,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
     AutoRoller autoRoller;
 
     function setUp() public {
-        target     = new MockERC20("TestTarget", "TT0", 18);
+        target     =  new MockERC20("TestTarget", "TT0", 18);
         underlying = new MockERC20("TestUnderlying", "TU0", 18);
 
         (balancerVault, spaceFactory) = (
@@ -85,7 +84,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
             level: 31 // default level, everything is allowed except for the redemption cb
         });
 
-        mockAdapter = new MockAdapter(
+        mockAdapter = new MockOwnableAdapter(
             address(divider),
             address(target),
             address(underlying),
@@ -111,6 +110,7 @@ contract AutoRollerTest is DSTestPlus, stdCheats {
         vm.startPrank(AddressBook.SENSE_MULTISIG);
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
+
         vm.stopPrank();
 
         target.mint(address(this), 2e18);
