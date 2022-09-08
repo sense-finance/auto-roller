@@ -37,13 +37,15 @@ contract AutoRollerTest is DSTestPlus {
 
     Vm internal constant vm = Vm(HEVM_ADDRESS);
     uint256 public constant SECONDS_PER_YEAR = 31536000;
+    uint256 public constant STAKE_SIZE = 0.1e18;
 
     address alice = address(0x1337);
     address bob = address(0x133701);
 
     MockERC20 target;
     MockERC20 underlying;
-    MockOwnableAdapter mockAdapter;
+    MockERC20 stake;
+    MockAdapter mockAdapter;
     RollerUtils utils;
 
     SpaceFactoryLike spaceFactory;
@@ -73,10 +75,12 @@ contract AutoRollerTest is DSTestPlus {
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
 
+        stake = new MockERC20("Stake", "ST", 18);
+
         BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
-            stake: address(new MockERC20("Stake", "ST", 18)), // stake size is 0, so the we don't actually need any stake token
-            stakeSize: 0,
+            stake: address(stake),
+            stakeSize: STAKE_SIZE,
             minm: 0, // 0 minm, so there's not lower bound on future maturity
             maxm: type(uint64).max, // large maxm, so there's not upper bound on future maturity
             mode: 0, // monthly maturities
@@ -113,8 +117,13 @@ contract AutoRollerTest is DSTestPlus {
 
         vm.stopPrank();
 
+        // Mint Target
         target.mint(address(this), 2e18);
         target.approve(address(autoRoller), 2e18);
+
+        // Mint Stake
+        stake.mint(address(this), 1e18);
+        stake.approve(address(autoRoller), 1e18);
 
         // Set protocol fees
         vm.startPrank(AddressBook.SENSE_DEPLOYER);
@@ -175,6 +184,7 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("TARGETED_RATE", targetedRate);
 
         target.approve(address(autoRoller), 2e18);
+        stake.approve(address(autoRoller), 0.1e18);
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
 
@@ -201,12 +211,15 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.deposit(0.05e18, address(this));
 
         uint256 targetBalPre = target.balanceOf(address(this));
+        uint256 stakeBalPre = stake.balanceOf(address(this));
         // 2. Roll into the first Series.
         autoRoller.roll();
         uint256 targetBalPost = target.balanceOf(address(this));
+        uint256 stakeBalPost = stake.balanceOf(address(this));
 
         // Check that extra Target was pulled in during the roll to ensure the Vault had 0.01 unit of Target to initialize a rate with.
         assertEq(targetBalPre - targetBalPost, 0.01e18);
+        assertEq(stakeBalPre - stakeBalPost, STAKE_SIZE);
 
         // Sanity checks
         Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
