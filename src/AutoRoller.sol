@@ -8,7 +8,6 @@ import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 
 import { DateTime } from "./external/DateTime.sol";
 
-import { Trust } from "sense-v1-utils/Trust.sol";
 import { SafeCast } from "./SafeCast.sol";
 
 import { BalancerVault } from "./interfaces/BalancerVault.sol";
@@ -127,10 +126,10 @@ contract AutoRoller is ERC4626 {
         balancerVault = BalancerVault(_balancerVault);
 
         // Allow the Divder to move this contract's Target for PT/YT issuance.
-        _target.approve(address(_divider), type(uint256).max);
+        _target.safeApprove(address(_divider), type(uint256).max);
 
         // Allow Balancer to move this contract's Target for Space pools joins.
-        _target.approve(address(_balancerVault), type(uint256).max);
+        _target.safeApprove(address(_balancerVault), type(uint256).max);
 
         uint256 scalingFactor = 10**(18 - decimals);
 
@@ -159,17 +158,17 @@ contract AutoRoller is ERC4626 {
             revert RollWindowNotOpen();
         }
 
-        adapter.openSponsorWindow();
         lastRoller = msg.sender;
+        adapter.openSponsorWindow();
     }
 
     function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
-        stake.safeTransferFrom(msg.sender, address(this), stakeSize);
+        stake.safeTransferFrom(lastRoller, address(this), stakeSize);
 
         // Allow the Periphery to move stake for sponsoring the Series.
-        stake.approve(address(periphery), stakeSize);
+        stake.safeApprove(address(periphery), stakeSize);
 
         uint256 _maturity = utils.getFutureMaturity(targetDuration);
 
