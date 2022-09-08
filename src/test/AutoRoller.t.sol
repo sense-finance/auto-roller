@@ -20,7 +20,8 @@ import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
 import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
-import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
+import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../AutoRoller.sol";
+import { AutoRollerFactory } from "../AutoRollerFactory.sol";
 
 interface Authentication {
     function getActionId(bytes4) external returns (bytes32);
@@ -97,18 +98,22 @@ contract AutoRollerTest is DSTestPlus {
 
         utils = new RollerUtils();
 
-        autoRoller = new AutoRoller(
-            target,
+        AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            address(periphery),
             utils,
-            address(1)
+            type(AutoRoller).creationCode
         );
 
-        mockAdapter.setIsTrusted(address(autoRoller), true);
+        mockAdapter.setIsTrusted(address(arFactory), true);
+
+        autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            address(1),
+            3,
+            2.9e18
+        );
 
         // Start multisig (admin) prank calls   
         vm.startPrank(AddressBook.SENSE_MULTISIG);
@@ -150,6 +155,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("PERIPHERY", address(0xbabe));
 
         vm.expectRevert();
+        autoRoller.setParam("OWNER", address(0xbabe));
+
+        vm.expectRevert();
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
@@ -176,7 +184,7 @@ contract AutoRollerTest is DSTestPlus {
             address(periphery),
             address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            OwnedAdapterLike(address(mockAdapter)),
             utils,
             address(1)
         );
