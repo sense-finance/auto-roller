@@ -45,7 +45,7 @@ contract AutoRollerTest is DSTestPlus {
     MockERC20 target;
     MockERC20 underlying;
     MockERC20 stake;
-    MockAdapter mockAdapter;
+    MockOwnableAdapter mockAdapter;
     RollerUtils utils;
 
     SpaceFactoryLike spaceFactory;
