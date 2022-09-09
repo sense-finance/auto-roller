@@ -23,8 +23,15 @@ import { AutoRollerFactory } from "../src/AutoRollerFactory.sol";
 import { ProtocolFeesController, Authentication } from "../src/test/AutoRoller.t.sol";
 
 contract TestnetDeploymentScript is Script {
+
+    address public constant REWARDS_RECIPIENT = address(1);
+    uint256 public constant TARGET_DURATION = 3;
+    uint256 public constant TARGETED_RATE = 2.9e18;
+
     function run() external {
         vm.startBroadcast();
+
+        console.log("Deploying from:", msg.sender);
 
         MockERC20 target = new MockERC20("cUSDC", "cUSDC", 18);
         MockERC20 underlying = new MockERC20("USDC", "USDC", 18);
@@ -77,9 +84,9 @@ contract TestnetDeploymentScript is Script {
 
         AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
-            address(1), // receipient
-            3,
-            2.9e18
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            TARGETED_RATE
         );
 
         console2.log("Auto Roller ", address(autoRoller));

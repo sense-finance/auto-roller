@@ -40,6 +40,10 @@ contract AutoRollerTest is DSTestPlus {
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant STAKE_SIZE = 0.1e18;
 
+    address public constant REWARDS_RECIPIENT = address(1);
+    uint256 public constant TARGET_DURATION = 3;
+    uint256 public constant TARGETED_RATE = 2.9e18;
+
     address alice = address(0x1337);
     address bob = address(0x133701);
 
@@ -110,9 +114,9 @@ contract AutoRollerTest is DSTestPlus {
 
         autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
-            address(1),
-            3,
-            2.9e18
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            TARGETED_RATE
         );
 
         // Start multisig (admin) prank calls   
@@ -654,7 +658,7 @@ contract AutoRollerTest is DSTestPlus {
         uint256 beforeBal = 5e18;  // mintor has more target than they intend to deposit
         target.mint(mintor, beforeBal);
         Mintooor(mintor).mint(0.5e18);
-        uint256 afterBal = target.balanceOf(mintor);
+        // uint256 afterBal = target.balanceOf(mintor);
 
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));

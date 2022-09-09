@@ -52,7 +52,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
 
         autoRoller = AutoRoller(super._create(constructorArgs, salt));
 
-        // Factory must have adapter auth
+        // Factory must have adapter auth so that it can give auth to the roller
         adapter.setIsTrusted(address(autoRoller), true);
 
         autoRoller.setParam("TARGET_DURATION", targetDuration);
