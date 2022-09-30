@@ -380,7 +380,7 @@ contract AutoRoller is ERC4626 {
         }
     }
 
-    /// @notice The same as convertToShares, except that slippage is considered in previewDeposit.
+    /// @notice The same as convertToShares, except that slippage is considered.
     function previewDeposit(uint256 assets) public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewDeposit(assets);
@@ -409,7 +409,7 @@ contract AutoRoller is ERC4626 {
         }
     }
 
-    /// @notice The same as convertToAssets, except that slippage is considered in previewRedeem.
+    /// @notice The same as convertToAssets, except that slippage is considered.
     function previewRedeem(uint256 shares) public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewRedeem(shares);
@@ -586,6 +586,7 @@ contract AutoRoller is ERC4626 {
     }
 
     /* ========== 4626 EXTENSIONS ========== */
+    // slippage?
 
     /// @notice Quick exit into the constituent assets
     /// @dev Outside of the ERC 4626 standard
@@ -621,6 +622,8 @@ contract AutoRoller is ERC4626 {
 
     /* ========== GENERAL UTILS ========== */
 
+    /// @dev Exit Assets from the Space pool and combine the PTs with YTs we have reserved for the given number of shares.
+    /// @param shares number of shares to exit and combine with.
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
         uint256 supply = totalSupply; // Save extra SLOAD.
 
@@ -657,6 +660,8 @@ contract AutoRoller is ERC4626 {
         }
     }
 
+    /// @notice Transfer any token not included in the set {asset,yt,pt,space} to the rewards recipient.
+    /// @param coin address of the coin to transfer out.
     function claimRewards(ERC20 coin) external {
         require(coin != asset);
         if (maturity != MATURITY_NOT_SET) {
@@ -704,6 +709,7 @@ contract AutoRoller is ERC4626 {
         ));
     }
 
+    /// @dev Get PT and Target reserve balances for the current Space pool.
     function _getSpaceReserves() internal view returns (uint256, uint256) {
         (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
         uint256 _pti = pti;
@@ -730,6 +736,7 @@ contract AutoRoller is ERC4626 {
 
     /* ========== SPACE POOL SOLVERS ========== */
 
+    /// @notice Determine the maximum number of PTs we can still into the current space pool given the current `maxRate`.
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
