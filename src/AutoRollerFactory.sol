@@ -62,9 +62,5 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         emit RollerCreated(address(adapter), address(autoRoller));
     }
 
-    function addRoller(address adapter, address autoRoller) public requiresTrust {
-        emit RollerCreated(adapter, autoRoller);
-    }
-
     event RollerCreated(address indexed adapter, address autoRoller);
 }

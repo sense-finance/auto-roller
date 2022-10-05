@@ -69,33 +69,33 @@ contract AutoRoller is ERC4626 {
     /* ========== CONSTANTS ========== */
 
     uint32 internal constant MATURITY_NOT_SET = type(uint32).max;
-    int256 internal constant WITHDRAWAL_GUESS_OFFSET = 0.95e18;
+    int256 internal constant WITHDRAWAL_GUESS_OFFSET = 0.95e18; // Offset from the number of assets in this contract the first withdrawal guess will be made.
 
     /* ========== IMMUTABLES ========== */
 
-    DividerLike   internal immutable divider;
-    BalancerVault internal immutable balancerVault;
-    OwnedAdapterLike   internal immutable adapter;
+    DividerLike      internal immutable divider;
+    BalancerVault    internal immutable balancerVault;
+    OwnedAdapterLike internal immutable adapter;
 
-    uint256 internal immutable ifee;
-    uint256 internal immutable minSwapAmount;
-    uint256 internal immutable firstDeposit;
+    uint256 internal immutable ifee; // Cached issuance fee.
+    uint256 internal immutable minSwapAmount; // Min number of PTs that can be swapped out when exiting.
+    uint256 internal immutable firstDeposit; // Size of the first deposit that gets locked in the contract permanently.
     uint256 internal immutable maxError; // A conservative buffer for "rounding" swap previews that accounts for compounded pow of imprecision.
-    address internal immutable rewardRecipient;
+    address internal immutable rewardRecipient; // Recipient address for any unexpected tokens that end up in this contract.
 
     /* ========== MUTABLE STORAGE ========== */
 
     PeripheryLike    internal periphery;
     SpaceFactoryLike internal spaceFactory;
-    address          internal owner;
-    RollerUtils      internal utils;
+    address          internal owner; // Admin that can set params.
+    RollerUtils      internal utils; // Utility contract with convenience getter functions.
 
     // Active Series
     YTLike  internal yt;
     ERC20   internal pt;
     Space   internal space;
     bytes32 internal poolId;
-    address internal lastRoller;
+    address internal lastRoller; // Last address to call roll.
 
     // Separate slots to meet contract size limits.
     uint256 internal initScale;
@@ -105,8 +105,9 @@ contract AutoRoller is ERC4626 {
     uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
     uint256 internal targetedRate   = 2.9e18; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
     uint256 internal targetDuration = 3; // Number of months or weeks in the future newly sponsored Series should mature.
-    uint256 public cooldown       = 10 days;
-    uint256 public lastSettle;
+
+    uint256 public cooldown         = 10 days; // Length of mandatory cooldown period during which LPs can withdraw without slippage.
+    uint256 public lastSettle; // Timestamp from when settlement was last called.
 
     constructor(
         ERC20 _target,
@@ -164,6 +165,10 @@ contract AutoRoller is ERC4626 {
         adapter.openSponsorWindow();
     }
 
+    /// @notice Sponsor a new Series, issue PTs, and migrate liquidity into the new Space pool.
+    /// @dev We only expect this function to be called by this roller's adapter in the callback triggered within the adapter.openSponsorWindow call.
+    /// @param stake the adapter's stake token address.
+    /// @param stakeSize the adapter's stake size.
     function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
@@ -255,7 +260,7 @@ contract AutoRoller is ERC4626 {
         emit Rolled(_maturity, uint256(_initScale), address(_space), msg.sender);
     }
 
-    /// @notice Settle the active Series and enter a cooldown phase.
+    /// @notice Settle the active Series, transfer stake and ifees to the settler, and enter a cooldown phase.
     function settle() public {
         if(msg.sender != lastRoller) revert InvalidSettler();
 
@@ -273,7 +278,8 @@ contract AutoRoller is ERC4626 {
         startCooldown();
     }
 
-    // Enter a cooldown phase where users can redeem without slippage.
+    /// @notice Enter a cooldown phase where users can redeem without slippage. Often this will be initiated by this.settle,
+    ///         but it can be called externally if the Series was settled externally.
     function startCooldown() public {
         require(divider.mscale(address(adapter), maturity) != 0);
 
@@ -290,8 +296,9 @@ contract AutoRoller is ERC4626 {
         delete pt; delete yt; delete space; delete pti; delete poolId; delete initScale; // Re-set variables to defaults, collect gas refund.
     }
 
-    /* ========== 4626 ========== */
+    /* ========== 4626 SPEC ========== */
 
+    /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
             (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(shares);
@@ -320,6 +327,7 @@ contract AutoRoller is ERC4626 {
         }
     }
 
+    /// @dev Joins the Space pool, issuing PTs in order to match the current pool's ratio of Target:PT
     function afterDeposit(uint256 assets, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
             uint256 _supply = totalSupply; // Saves extra SLOADs.
@@ -381,6 +389,8 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice The same as convertToShares, except that slippage is considered.
+    /// @dev Preview the number of new LP shares that would be minted by joining with the given amount of Target, then use that
+    ///      as a percentage of the total number of LP shares held in this contract to preview the number of new roller shares.
     function previewDeposit(uint256 assets) public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewDeposit(assets);
@@ -397,6 +407,8 @@ contract AutoRoller is ERC4626 {
         }
     }
 
+    /// @dev Preview the amount of Target needed to mint the given number of shares by determining how much of
+    ///      each asset in this contract the given number of shares represent, then conver that all into Target.
     function previewMint(uint256 shares) public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewMint(shares);
@@ -535,6 +547,7 @@ contract AutoRoller is ERC4626 {
         }
     }
 
+    /// @notice Maximum number of shares the given owner can redeem, given Space pool liquidity constraints and the maxRate guard.
     function maxRedeem(address owner) public view override returns (uint256) { // No idiosyncratic owner restrictions.
         if (maturity == MATURITY_NOT_SET) {
             return super.maxRedeem(owner);
@@ -586,10 +599,11 @@ contract AutoRoller is ERC4626 {
     }
 
     /* ========== 4626 EXTENSIONS ========== */
-    // slippage?
 
-    /// @notice Quick exit into the constituent assets
-    /// @dev Outside of the ERC 4626 standard
+    /// @notice Quick exit into the constituent assets.
+    /// @param shares Number of shares to eject with.
+    /// @param receiver Destination address for the constituent assets.
+    /// @param owner Onwer of the shares.
     function eject(
         uint256 shares,
         address receiver,
@@ -736,7 +750,7 @@ contract AutoRoller is ERC4626 {
 
     /* ========== SPACE POOL SOLVERS ========== */
 
-    /// @notice Determine the maximum number of PTs we can still into the current space pool given the current `maxRate`.
+    /// @notice Determine the maximum number of PTs we can sell into the current space pool given the current `maxRate`.
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
@@ -752,6 +766,7 @@ contract AutoRoller is ERC4626 {
 
     /* ========== ADMIN ========== */
 
+    /// @notice Set address-based admin params, only callable by the owner.
     function setParam(bytes32 what, address data) external {
         require(msg.sender == owner);
         if (what == "SPACE_FACTORY") spaceFactory = SpaceFactoryLike(data);
@@ -761,6 +776,7 @@ contract AutoRoller is ERC4626 {
         emit ParamChanged(what, data);
     }
 
+    /// @notice Set uint-based admin params, only callable by the owner.
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = data;
