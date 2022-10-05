@@ -604,6 +604,9 @@ contract AutoRoller is ERC4626 {
     /// @param shares Number of shares to eject with.
     /// @param receiver Destination address for the constituent assets.
     /// @param owner Onwer of the shares.
+    /// @return assets Amount of asset redeemable by the given number of shares.
+    /// @return excessBal Amount of excess PT or YT redeemable by the given number of shares.
+    /// @return isExcessPTs Whether the excess token is a YT or PT.
     function eject(
         uint256 shares,
         address receiver,
@@ -638,6 +641,8 @@ contract AutoRoller is ERC4626 {
 
     /// @dev Exit Assets from the Space pool and combine the PTs with YTs we have reserved for the given number of shares.
     /// @param shares number of shares to exit and combine with.
+    /// @return excessBal Amount of excess PT or YT redeemable by the given number of shares.
+    /// @return isExcessPTs Whether the excess token is a YT or PT.
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
         uint256 supply = totalSupply; // Save extra SLOAD.
 
@@ -715,6 +720,7 @@ contract AutoRoller is ERC4626 {
 
     /// @dev Calculates the amount of Target needed for issuance such that the PT:Target ratio in
     ///      the Space pool will be preserved after issuing and joining issued PTs and remaining Target.
+    /// @return asset Amount of Target that should be used for issuance.
     function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale) 
         internal view returns (uint256) 
     {
@@ -724,6 +730,8 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @dev Get PT and Target reserve balances for the current Space pool.
+    /// @return ptReserves PT reserve amount.
+    /// @return targetReserves Target reserve amount.
     function _getSpaceReserves() internal view returns (uint256, uint256) {
         (, uint256[] memory balances, ) = balancerVault.getPoolTokens(poolId);
         uint256 _pti = pti;
@@ -732,6 +740,10 @@ contract AutoRoller is ERC4626 {
 
     /// @dev Decompose shares works to break shares into their constituent parts, 
     ///      and also preview the assets required to mint a given number of shares.
+    /// @return targetAmount Target the number of shares has a right to.
+    /// @return ptAmount PTs the number of shares has a right to.
+    /// @return ytAmount YTs the number of shares has a right to.
+    /// @return lpAmount Space LP shares the number of shares has a right to.
     function _decomposeShares(uint256 ptReserves, uint256 targetReserves, uint256 shares, bool withLoose)
         internal view returns (uint256, uint256, uint256, uint256)
     {
@@ -751,6 +763,7 @@ contract AutoRoller is ERC4626 {
     /* ========== SPACE POOL SOLVERS ========== */
 
     /// @notice Determine the maximum number of PTs we can sell into the current space pool given the current `maxRate`.
+    /// @return ptAmount Maximum number of PTs.
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
