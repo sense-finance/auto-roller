@@ -19,6 +19,7 @@ import { BalancerVault } from "../src/interfaces/BalancerVault.sol";
 import { MockOwnableAdapter, BaseAdapter } from "../src/test/utils/MockOwnedAdapter.sol";
 import { AddressBook } from "../src/test/utils/AddressBook.sol";
 import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../src/AutoRoller.sol";
+import { RollerPeriphery } from "../src/RollerPeriphery.sol";
 import { AutoRollerFactory } from "../src/AutoRollerFactory.sol";
 import { ProtocolFeesController, Authentication } from "../src/test/AutoRoller.t.sol";
 
@@ -50,10 +51,13 @@ contract TestnetDeploymentScript is Script {
 
         RollerUtils utils = new RollerUtils();
 
+        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+
         AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
             address(balancerVault),
             address(periphery),
+            address(rollerPeriphery),
             utils,
             type(AutoRoller).creationCode
         );
