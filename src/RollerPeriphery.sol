@@ -5,21 +5,26 @@ import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
+import { AutoRoller } from "./AutoRoller.sol";
+
 // Inspired by https://github.com/fei-protocol/ERC4626/blob/main/src/ERC4626Router.sol
 contract RollerPeriphery {
     using SafeTransferLib for ERC20;
 
-    /// @notice thrown when amount of assets received is below the min set by caller
+    /// @notice thrown when amount of assets received is below the min set by caller.
     error MinAssetError();
 
-    /// @notice thrown when amount of shares received is below the min set by caller
+    /// @notice thrown when amount of shares received is below the min set by caller.
     error MinSharesError();
 
-    /// @notice thrown when amount of assets received is above the max set by caller
+    /// @notice thrown when amount of assets received is above the max set by caller.
     error MaxAssetError();
 
-    /// @notice thrown when amount of shares received is above the max set by caller
+    /// @notice thrown when amount of shares received is above the max set by caller.
     error MaxSharesError();
+
+    /// @notice thrown when amount of assets or excess received is below the max set by caller.
+    error MinAssetsOrExcessError();
 
     function redeem(ERC4626 vault, uint256 shares, address receiver, uint256 minAmountOut) external returns (uint256 assets) {
         if ((assets = vault.redeem(shares, receiver, msg.sender)) < minAmountOut) {
@@ -41,11 +46,21 @@ contract RollerPeriphery {
         }
     }
 
-    function depoist(ERC4626 vault, uint256 assets, address receiver, uint256 minSharesOut) external returns (uint256 shares) {
+    function deposit(ERC4626 vault, uint256 assets, address receiver, uint256 minSharesOut) external returns (uint256 shares) {
         ERC20(vault.asset()).safeTransferFrom(msg.sender, address(this), assets);
 
         if ((shares = vault.deposit(assets, receiver)) < minSharesOut) {
             revert MinSharesError();
+        }
+    }
+
+    function eject(ERC4626 vault, uint256 shares, address receiver, uint256 minAssetsOut, uint256 minExcessOut)
+        external returns (uint256 assets, uint256 excessBal, bool isExcessPTs)
+    {
+        (assets, excessBal, isExcessPTs) = AutoRoller(address(vault)).eject(shares, receiver, msg.sender);
+
+        if (assets < minAssetsOut || excessBal < minExcessOut) {
+            revert MinAssetsOrExcessError();
         }
     }
 

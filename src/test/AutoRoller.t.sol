@@ -62,6 +62,7 @@ contract AutoRollerTest is DSTestPlus {
     ERC20 pt;
     ERC20 yt;
 
+    RollerPeriphery rollerPeriphery;
     AutoRoller autoRoller;
 
     function setUp() public {
@@ -104,10 +105,13 @@ contract AutoRollerTest is DSTestPlus {
 
         utils = new RollerUtils();
 
+        rollerPeriphery = new RollerPeriphery();
+
         AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
             address(balancerVault),
             address(periphery),
+            address(rollerPeriphery),
             utils,
             type(AutoRoller).creationCode
         );
@@ -689,9 +693,9 @@ contract AutoRollerTest is DSTestPlus {
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
-        rollerPeriphery.depoist(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares + 1);
+        rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares + 1);
 
-        uint256 receivedShares = rollerPeriphery.depoist(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares);
+        uint256 receivedShares = rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares);
 
         uint256 shareBalPost = autoRoller.balanceOf(address(this));
 
