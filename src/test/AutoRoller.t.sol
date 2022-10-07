@@ -5,6 +5,7 @@ import { Vm } from "forge-std/Vm.sol";
 import { console } from "forge-std/console.sol";
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
+import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
@@ -22,6 +23,7 @@ import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
 import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../AutoRoller.sol";
 import { AutoRollerFactory } from "../AutoRollerFactory.sol";
+import { RollerPeriphery } from "../RollerPeriphery.sol";
 
 interface Authentication {
     function getActionId(bytes4) external returns (bytes32);
@@ -398,6 +400,7 @@ contract AutoRollerTest is DSTestPlus {
         assertGt(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
     }
 
+
     // The following tests are adapted from Solmate's ERC4626 testing suite
 
     function testFuzzSingleMintRedeemActivePhase(uint256 aliceShareAmount) public {
@@ -669,6 +672,52 @@ contract AutoRollerTest is DSTestPlus {
         aafter = target.balanceOf(address(this));
         uint256 attackerInflow = aafter - before;
         assertGt(attackerOutflow, attackerInflow);
+    }
+
+    // Roller Periphery
+
+    function testRollerPeripheryDepositRedeem() public {
+        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+
+        autoRoller.roll();
+
+        target.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 previewedShares = autoRoller.previewDeposit(1.1e18);
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
+        rollerPeriphery.depoist(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares + 1);
+
+        uint256 receivedShares = rollerPeriphery.depoist(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, receivedShares);
+        assertEq(receivedShares, shareBalPost - shareBalPre);
+
+        uint256 assetBalPre = target.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+
+        uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetError.selector));
+        rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets + 1);
+
+        uint256 receivedAssets = rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets);
+
+        uint256 assetBalPost = target.balanceOf(address(this));
+
+        assertEq(previewedAssets, receivedAssets);
+        assertEq(receivedAssets, assetBalPost - assetBalPre);
+
+        // No asset or share left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
