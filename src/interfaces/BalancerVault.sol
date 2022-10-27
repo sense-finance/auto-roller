@@ -16,11 +16,6 @@ interface BalancerVault {
         bytes userData;
         bool toInternalBalance;
     }
-    enum PoolSpecialization {
-        GENERAL,
-        MINIMAL_SWAP_INFO,
-        TWO_TOKEN
-    }
     enum SwapKind {
         GIVEN_IN,
         GIVEN_OUT
@@ -49,8 +44,6 @@ interface BalancerVault {
             uint256 maxBlockNumber
         );
 
-    function getPool(bytes32 poolId) external view returns (address, PoolSpecialization);
-
     function swap(
         SingleSwap memory singleSwap,
         FundManagement memory funds,
@@ -71,4 +64,7 @@ interface BalancerVault {
         address payable recipient,
         ExitPoolRequest memory request
     ) external;
+
+    function getProtocolFeesCollector() external returns (address);
+    function getAuthorizer() external returns (address);
 }
