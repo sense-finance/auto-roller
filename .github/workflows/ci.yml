@@ -1,0 +1,35 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.ACCESS_TOKEN }}
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 14
+
+      - name: Install npm dependencies
+        working-directory: ./lib/sense-v1
+        run: yarn
+
+      - name: Install Foundry
+        uses: onbjerg/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Run forge tests
+        run: forge test
+
+      - name: Check code coverage
+        run: forge coverage --report lcov
+        id: coverage
+
+      - uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
