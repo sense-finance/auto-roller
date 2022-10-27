@@ -5,6 +5,7 @@ pragma solidity 0.8.11;
  * @dev Base factory for contracts whose creation code is so large that the factory cannot hold it. This happens when
  * the contract's creation code grows close to 24kB.
  * @author Balancer Labs
+ * https://github.com/balancer-labs/balancer-v2-monorepo/blob/master/pkg/solidity-utils/contracts/helpers/BaseSplitCodeFactory.sol
  *
  * Note that this factory cannot help with contracts that have a *runtime* (deployed) bytecode larger than 24kB.
  */
@@ -84,7 +85,7 @@ abstract contract BaseSplitCodeFactory {
     }
 
     /**
-     * @dev Returns the two addresses where the creation code of the contract crated by this factory is stored.
+     * @dev Returns the two addresses where the creation code of the contract created by this factory is stored.
      */
     function getCreationCodeContracts() public view returns (address contractA, address contractB) {
         return (_creationCodeContractA, _creationCodeContractB);
