@@ -19,7 +19,7 @@ abstract contract OwnableAdapter is BaseAdapter {
     }
 }
 
-contract MockAdapter is OwnableAdapter, Trust {
+contract MockOwnableAdapter is OwnableAdapter, Trust {
     uint256 public override scale = 1.1e18;
     uint256 internal open = 1;
 
