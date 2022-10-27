@@ -5,6 +5,7 @@ import { Vm } from "forge-std/Vm.sol";
 import { console } from "forge-std/console.sol";
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
+import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
@@ -18,9 +19,11 @@ import { Errors as SenseCoreErrors } from "sense-v1-utils/libs/Errors.sol";
 import { Space } from "../interfaces/Space.sol";
 import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
-import { MockAdapter } from "./utils/MockOwnedAdapter.sol";
+import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
-import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
+import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../AutoRoller.sol";
+import { AutoRollerFactory } from "../AutoRollerFactory.sol";
+import { RollerPeriphery } from "../RollerPeriphery.sol";
 
 interface Authentication {
     function getActionId(bytes4) external returns (bytes32);
@@ -39,13 +42,17 @@ contract AutoRollerTest is DSTestPlus {
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant STAKE_SIZE = 0.1e18;
 
+    address public constant REWARDS_RECIPIENT = address(1);
+    uint256 public constant TARGET_DURATION = 3;
+    uint256 public constant TARGETED_RATE = 2.9e18;
+
     address alice = address(0x1337);
     address bob = address(0x133701);
 
     MockERC20 target;
     MockERC20 underlying;
     MockERC20 stake;
-    MockAdapter mockAdapter;
+    MockOwnableAdapter mockAdapter;
     RollerUtils utils;
 
     SpaceFactoryLike spaceFactory;
@@ -55,10 +62,11 @@ contract AutoRollerTest is DSTestPlus {
     ERC20 pt;
     ERC20 yt;
 
+    RollerPeriphery rollerPeriphery;
     AutoRoller autoRoller;
 
     function setUp() public {
-        target     = new MockERC20("TestTarget", "TT0", 18);
+        target     =  new MockERC20("TestTarget", "TT0", 18);
         underlying = new MockERC20("TestUnderlying", "TU0", 18);
 
         (balancerVault, spaceFactory) = (
@@ -88,7 +96,7 @@ contract AutoRollerTest is DSTestPlus {
             level: 31 // default level, everything is allowed except for the redemption cb
         });
 
-        mockAdapter = new MockAdapter(
+        mockAdapter = new MockOwnableAdapter(
             address(divider),
             address(target),
             address(underlying),
@@ -97,23 +105,31 @@ contract AutoRollerTest is DSTestPlus {
 
         utils = new RollerUtils();
 
-        autoRoller = new AutoRoller(
-            target,
+        rollerPeriphery = new RollerPeriphery();
+
+        AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            address(periphery),
+            address(rollerPeriphery),
             utils,
-            address(1)
+            type(AutoRoller).creationCode
         );
 
-        mockAdapter.setIsTrusted(address(autoRoller), true);
+        mockAdapter.setIsTrusted(address(arFactory), true);
+
+        autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            TARGETED_RATE
+        );
 
         // Start multisig (admin) prank calls   
         vm.startPrank(AddressBook.SENSE_MULTISIG);
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
+
         vm.stopPrank();
 
         // Mint Target
@@ -149,6 +165,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("PERIPHERY", address(0xbabe));
 
         vm.expectRevert();
+        autoRoller.setParam("OWNER", address(0xbabe));
+
+        vm.expectRevert();
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
@@ -175,7 +194,7 @@ contract AutoRollerTest is DSTestPlus {
             address(periphery),
             address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            OwnedAdapterLike(address(mockAdapter)),
             utils,
             address(1)
         );
@@ -384,6 +403,7 @@ contract AutoRollerTest is DSTestPlus {
 
         assertGt(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
     }
+
 
     // The following tests are adapted from Solmate's ERC4626 testing suite
 
@@ -645,7 +665,7 @@ contract AutoRollerTest is DSTestPlus {
         uint256 beforeBal = 5e18;  // mintor has more target than they intend to deposit
         target.mint(mintor, beforeBal);
         Mintooor(mintor).mint(0.5e18);
-        uint256 afterBal = target.balanceOf(mintor);
+        // uint256 afterBal = target.balanceOf(mintor);
 
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));
@@ -656,6 +676,52 @@ contract AutoRollerTest is DSTestPlus {
         aafter = target.balanceOf(address(this));
         uint256 attackerInflow = aafter - before;
         assertGt(attackerOutflow, attackerInflow);
+    }
+
+    // Roller Periphery
+
+    function testRollerPeripheryDepositRedeem() public {
+        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+
+        autoRoller.roll();
+
+        target.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 previewedShares = autoRoller.previewDeposit(1.1e18);
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
+        rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares + 1);
+
+        uint256 receivedShares = rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, receivedShares);
+        assertEq(receivedShares, shareBalPost - shareBalPre);
+
+        uint256 assetBalPre = target.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+
+        uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetError.selector));
+        rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets + 1);
+
+        uint256 receivedAssets = rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets);
+
+        uint256 assetBalPost = target.balanceOf(address(this));
+
+        assertEq(previewedAssets, receivedAssets);
+        assertEq(receivedAssets, assetBalPost - assetBalPre);
+
+        // No asset or share left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
     function _swap(BalancerVault.SingleSwap memory request) internal {

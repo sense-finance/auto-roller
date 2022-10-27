@@ -1,5 +1,7 @@
 cache/
 out/
+.env
+broadcast/
 
 # node
 node_modules/
