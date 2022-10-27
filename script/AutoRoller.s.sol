@@ -18,15 +18,28 @@ import { BalancerVault } from "../src/interfaces/BalancerVault.sol";
 
 import { MockOwnableAdapter, BaseAdapter } from "../src/test/utils/MockOwnedAdapter.sol";
 import { AddressBook } from "../src/test/utils/AddressBook.sol";
-import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../src/AutoRoller.sol";
+import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../src/AutoRoller.sol";
+import { AutoRollerFactory } from "../src/AutoRollerFactory.sol";
 import { ProtocolFeesController, Authentication } from "../src/test/AutoRoller.t.sol";
 
 contract TestnetDeploymentScript is Script {
+
+    address public constant REWARDS_RECIPIENT = address(1);
+    uint256 public constant TARGET_DURATION = 3;
+    uint256 public constant TARGETED_RATE = 2.9e18;
+
     function run() external {
         vm.startBroadcast();
 
+        console.log("Deploying from:", msg.sender);
+
         MockERC20 target = new MockERC20("cUSDC", "cUSDC", 18);
         MockERC20 underlying = new MockERC20("USDC", "USDC", 18);
+        MockERC20 stake = new MockERC20("STAKE", "ST", 18);
+
+        console2.log("Target:", address(target));
+        console2.log("Underlying:", address(underlying));
+        console2.log("Stake:", address(stake));
 
         (BalancerVault balancerVault, SpaceFactoryLike spaceFactory) = (
             BalancerVault(AddressBook.BALANCER_VAULT),
@@ -37,10 +50,20 @@ contract TestnetDeploymentScript is Script {
 
         RollerUtils utils = new RollerUtils();
 
+        AutoRollerFactory arFactory = new AutoRollerFactory(
+            DividerLike(address(divider)),
+            address(balancerVault),
+            address(periphery),
+            utils,
+            type(AutoRoller).creationCode
+        );
+
+        console2.log("Auto Roller Factory:", address(arFactory));
+
         BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
-            stake: address(new MockERC20("Stake", "ST", 18)), // stake size is 0, so the we don't actually need any stake token
-            stakeSize: 0,
+            stake: address(stake),
+            stakeSize: 0.1e18,
             minm: 0, // 0 minm, so there's not lower bound on future maturity
             maxm: type(uint64).max, // large maxm, so there's not upper bound on future maturity
             mode: 0, // monthly maturities
@@ -55,21 +78,22 @@ contract TestnetDeploymentScript is Script {
             mockAdapterParams
         );
 
-        AutoRoller autoRoller = new AutoRoller(
-            target,
-            DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
-            address(balancerVault),
-            AdapterLike(address(mockAdapter)),
-            utils,
-            msg.sender
+        console2.log("Mock Adapter:", address(mockAdapter));
+
+        mockAdapter.setIsTrusted(address(arFactory), true);
+
+        AutoRoller autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            TARGETED_RATE
         );
+
+        console2.log("Auto Roller ", address(autoRoller));
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
-
 
         target.mint(msg.sender, 2e18);
         target.approve(address(autoRoller), 2e18);

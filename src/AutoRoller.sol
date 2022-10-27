@@ -42,12 +42,14 @@ interface PeripheryLike {
     function MIN_YT_SWAP_IN() external view returns (uint256);
 }
 
-interface AdapterLike {
+interface OwnedAdapterLike {
+    function target() external view returns (address);
     function ifee() external view returns (uint256);
     function openSponsorWindow() external;
     function scale() external returns (uint256);
     function scaleStored() external view returns (uint256);
     function getStakeAndTarget() external view returns (address,address,uint256);
+    function setIsTrusted(address,bool) external;
 }
 
 contract AutoRoller is ERC4626 {
@@ -73,7 +75,7 @@ contract AutoRoller is ERC4626 {
 
     DividerLike   internal immutable divider;
     BalancerVault internal immutable balancerVault;
-    AdapterLike   internal immutable adapter;
+    OwnedAdapterLike   internal immutable adapter;
 
     uint256 internal immutable ifee;
     uint256 internal immutable minSwapAmount;
@@ -112,7 +114,7 @@ contract AutoRoller is ERC4626 {
         address _periphery,
         address _spaceFactory,
         address _balancerVault,
-        AdapterLike _adapter,
+        OwnedAdapterLike _adapter,
         RollerUtils _utils,
         address _rewardRecipient
     ) ERC4626(
@@ -174,7 +176,7 @@ contract AutoRoller is ERC4626 {
 
         // Assign Series data.
         (ERC20 _pt, YTLike _yt) = periphery.sponsorSeries(address(adapter), _maturity, true);
-        (Space _space, bytes32 _poolId, uint256 _pti, uint256 _initScale) = utils.getSpaceData(periphery, AdapterLike(msg.sender), _maturity);
+        (Space _space, bytes32 _poolId, uint256 _pti, uint256 _initScale) = utils.getSpaceData(periphery, OwnedAdapterLike(msg.sender), _maturity);
 
         // Allow Balancer to move the new PTs for joins & swaps.
         _pt.approve(address(balancerVault), type(uint256).max);
@@ -791,7 +793,7 @@ contract RollerUtils {
         return DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
     }
 
-    function getSpaceData(PeripheryLike periphery, AdapterLike adapter, uint256 nextMaturity)
+    function getSpaceData(PeripheryLike periphery, OwnedAdapterLike adapter, uint256 nextMaturity)
         public returns (Space, bytes32, uint256, uint256)
     {
         Space _space = periphery.spaceFactory().pools(address(adapter), nextMaturity);

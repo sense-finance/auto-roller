@@ -20,7 +20,8 @@ import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
 import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
-import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, AdapterLike } from "../AutoRoller.sol";
+import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../AutoRoller.sol";
+import { AutoRollerFactory } from "../AutoRollerFactory.sol";
 
 interface Authentication {
     function getActionId(bytes4) external returns (bytes32);
@@ -38,6 +39,10 @@ contract AutoRollerTest is DSTestPlus {
     Vm internal constant vm = Vm(HEVM_ADDRESS);
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant STAKE_SIZE = 0.1e18;
+
+    address public constant REWARDS_RECIPIENT = address(1);
+    uint256 public constant TARGET_DURATION = 3;
+    uint256 public constant TARGETED_RATE = 2.9e18;
 
     address alice = address(0x1337);
     address bob = address(0x133701);
@@ -97,18 +102,22 @@ contract AutoRollerTest is DSTestPlus {
 
         utils = new RollerUtils();
 
-        autoRoller = new AutoRoller(
-            target,
+        AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            address(periphery),
             utils,
-            address(1)
+            type(AutoRoller).creationCode
         );
 
-        mockAdapter.setIsTrusted(address(autoRoller), true);
+        mockAdapter.setIsTrusted(address(arFactory), true);
+
+        autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            TARGETED_RATE
+        );
 
         // Start multisig (admin) prank calls   
         vm.startPrank(AddressBook.SENSE_MULTISIG);
@@ -150,6 +159,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("PERIPHERY", address(0xbabe));
 
         vm.expectRevert();
+        autoRoller.setParam("OWNER", address(0xbabe));
+
+        vm.expectRevert();
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
@@ -176,7 +188,7 @@ contract AutoRollerTest is DSTestPlus {
             address(periphery),
             address(spaceFactory),
             address(balancerVault),
-            AdapterLike(address(mockAdapter)),
+            OwnedAdapterLike(address(mockAdapter)),
             utils,
             address(1)
         );
@@ -646,7 +658,7 @@ contract AutoRollerTest is DSTestPlus {
         uint256 beforeBal = 5e18;  // mintor has more target than they intend to deposit
         target.mint(mintor, beforeBal);
         Mintooor(mintor).mint(0.5e18);
-        uint256 afterBal = target.balanceOf(mintor);
+        // uint256 afterBal = target.balanceOf(mintor);
 
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));
