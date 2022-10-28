@@ -255,6 +255,10 @@ contract AutoRollerTest is DSTestPlus {
         // 1. Deposit during the initial cooldown phase.
         autoRoller.deposit(1e18, address(this));
 
+        // Can only eject during an active phase
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.ActivePhaseOnly.selector));
+        autoRoller.eject(autoRoller.balanceOf(address(this)), address(this), address(this));
+
         // 2. Roll into the first Series.
         autoRoller.roll();
 
@@ -420,6 +424,24 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
     }
 
+    function testFuzzMintRedeemCooldown(uint256 assets) public {
+        assets = bound(assets, 0.01e18, 100e18);
+
+        target.mint(alice, assets);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), assets);
+
+        uint256 previewedMint = autoRoller.previewMint(assets);
+        vm.prank(alice);
+        uint256 actualMint = autoRoller.mint(assets, alice);
+        assertEq(actualMint, previewedMint);
+
+        uint256 previewedRedeem = autoRoller.previewRedeem(actualMint);
+        vm.prank(alice);
+        uint256 actualRedeem = autoRoller.redeem(actualMint, alice, alice);
+        assertEq(actualRedeem, previewedRedeem);
+    }
 
     // The following tests are adapted from Solmate's ERC4626 testing suite
 
