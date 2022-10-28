@@ -256,8 +256,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.deposit(1e18, address(this));
 
         // Can only eject during an active phase
+        uint256 shareBal = autoRoller.balanceOf(address(this));
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.ActivePhaseOnly.selector));
-        autoRoller.eject(autoRoller.balanceOf(address(this)), address(this), address(this));
+        autoRoller.eject(shareBal, address(this), address(this));
 
         // 2. Roll into the first Series.
         autoRoller.roll();
