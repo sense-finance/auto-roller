@@ -230,6 +230,12 @@ contract AutoRollerTest is DSTestPlus {
 
         uint256 targetBalPre = target.balanceOf(address(this));
         uint256 stakeBalPre = stake.balanceOf(address(this));
+
+        // Can't open sponsor window directly
+        (, address stake, uint256 stakeSize) = Adapter(adapter).getStakeAndTarget();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.OnlyAdapter.selector));
+        autoRoller.onSponsorWindowOpened(ERC20(stake), stakeSize);
+
         // 2. Roll into the first Series.
         autoRoller.roll();
         uint256 targetBalPost = target.balanceOf(address(this));
