@@ -768,6 +768,64 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
+    function testRollerPeripheryEject() public {
+        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+
+        autoRoller.roll();
+
+        target.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 receivedShares = rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), 0);
+
+        autoRoller.approve(address(rollerPeriphery), receivedShares);
+
+        uint256 assets; uint256 excessBal; bool isExcessPTs;
+        uint256 id = vm.snapshot();
+        (assets, excessBal, isExcessPTs) = rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), 0, 0);
+        vm.revertTo(id);
+        
+        // Min expected check should fail if it's below what's previewed, for assets or excess
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
+        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets + 1, excessBal);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
+        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal + 1);
+
+        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal);
+    }
+
+
+    // function testExternalSettlement() public {
+    //     autoRoller.roll();
+
+    //     autoRoller.deposit(1.1e18, address(this));
+
+    //     uint256 maturity = autoRoller.maturity();
+        
+    //     vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
+
+    //     divider.settleSeries(address(mockAdapter), maturity);
+
+    //     Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
+
+    //     vm.expectRevert(SenseCoreErrors.AlreadySettled.selector);
+    //     autoRoller.settle();
+
+    //     assertTrue(space.balanceOf(address(autoRoller)) > 0);
+
+    //     autoRoller.startCooldown();
+
+    //     assertEq(space.balanceOf(address(autoRoller)), 0);
+    // }
+
+    // function testRedeemPreviewReversion() public {
+
+    // }
+
+    // outside cooldown test
+    // exxcess pts or yts
+    // redeem doesn't revert
+
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
             sender: address(this),
