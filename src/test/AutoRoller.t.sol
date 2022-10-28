@@ -795,28 +795,28 @@ contract AutoRollerTest is DSTestPlus {
     }
 
 
-    // function testExternalSettlement() public {
-    //     autoRoller.roll();
+    function testExternalSettlement() public {
+        autoRoller.roll();
 
-    //     autoRoller.deposit(1.1e18, address(this));
+        autoRoller.deposit(1.1e18, address(this));
 
-    //     uint256 maturity = autoRoller.maturity();
+        uint256 maturity = autoRoller.maturity();
         
-    //     vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
+        vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
 
-    //     divider.settleSeries(address(mockAdapter), maturity);
+        divider.settleSeries(address(mockAdapter), maturity);
 
-    //     Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
 
-    //     vm.expectRevert(SenseCoreErrors.AlreadySettled.selector);
-    //     autoRoller.settle();
+        vm.expectRevert(SenseCoreErrors.AlreadySettled.selector);
+        autoRoller.settle();
 
-    //     assertTrue(space.balanceOf(address(autoRoller)) > 0);
+        assertTrue(space.balanceOf(address(autoRoller)) > 0);
 
-    //     autoRoller.startCooldown();
+        autoRoller.startCooldown();
 
-    //     assertEq(space.balanceOf(address(autoRoller)), 0);
-    // }
+        assertEq(space.balanceOf(address(autoRoller)), 0);
+    }
 
     // function testRedeemPreviewReversion() public {
 
