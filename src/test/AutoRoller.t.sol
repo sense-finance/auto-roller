@@ -413,6 +413,11 @@ contract AutoRollerTest is DSTestPlus {
         vm.stopPrank();
 
         assertGt(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
+
+        vm.warp(autoRoller.maturity());
+        autoRoller.settle();
+
+        assertEq(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
     }
 
 
