@@ -232,9 +232,9 @@ contract AutoRollerTest is DSTestPlus {
         uint256 stakeBalPre = stake.balanceOf(address(this));
 
         // Can't open sponsor window directly
-        (, address stake, uint256 stakeSize) = Adapter(adapter).getStakeAndTarget();
+        (, , uint256 stakeSize) = mockAdapter.getStakeAndTarget();
         vm.expectRevert(abi.encodeWithSelector(AutoRoller.OnlyAdapter.selector));
-        autoRoller.onSponsorWindowOpened(ERC20(stake), stakeSize);
+        autoRoller.onSponsorWindowOpened(ERC20(address(stake)), stakeSize);
 
         // 2. Roll into the first Series.
         autoRoller.roll();
@@ -288,6 +288,11 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.roll();
 
         vm.warp(maturity);
+
+        // Since alice didn't roll, she can't settle
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
+        autoRoller.settle();
 
         autoRoller.settle();
 
@@ -809,6 +814,10 @@ contract AutoRollerTest is DSTestPlus {
         uint256 maturity = autoRoller.maturity();
         
         vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
+
+        // Series must be settled for cooldown
+        vm.expectRevert();
+        autoRoller.startCooldown();
 
         divider.settleSeries(address(mockAdapter), maturity);
 
