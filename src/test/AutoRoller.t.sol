@@ -724,6 +724,50 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
+    function testRollerPeripheryMintWithdraw() public {
+        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+
+        autoRoller.roll();
+
+        target.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 previewedAssets = autoRoller.previewMint(1.1e18);
+        uint256 assetBalPre = target.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAssetError.selector));
+        rollerPeriphery.mint(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedAssets - 1);
+
+        uint256 pulledAssets = rollerPeriphery.mint(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedAssets);
+
+        uint256 assetBalPost = target.balanceOf(address(this));
+
+        assertEq(previewedAssets, pulledAssets);
+        assertEq(pulledAssets, assetBalPre - assetBalPost);
+
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPre);
+
+        uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
+        rollerPeriphery.withdraw(ERC4626(address(autoRoller)), pulledAssets * 0.99e18 / 1e18, address(this), previewedShares - 1);
+
+        uint256 pulledShares = rollerPeriphery.withdraw(ERC4626(address(autoRoller)), pulledAssets * 0.99e18 / 1e18, address(this), previewedAssets);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, pulledShares);
+        assertEq(pulledShares, shareBalPre - shareBalPost);
+
+        // No asset or share left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+    }
+
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
             sender: address(this),
