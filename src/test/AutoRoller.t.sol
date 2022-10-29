@@ -382,6 +382,35 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(maxm, 0);
     }
 
+    function testClaimRewards() public {
+        autoRoller.roll();
+
+        MockERC20 rewardToken = new MockERC20("RewardsToken", "RT", 18);
+
+        uint256 MINT_AMT = 1.1e18;
+        rewardToken.mint(address(autoRoller), MINT_AMT);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(target)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(pt)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(yt)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(space)));
+
+        assertEq(rewardToken.balanceOf(REWARDS_RECIPIENT), 0);
+        autoRoller.claimRewards(ERC20(address(rewardToken)));
+        assertEq(rewardToken.balanceOf(REWARDS_RECIPIENT), MINT_AMT);
+    }
+
     function testFuzzMaxWithdraw(uint256 assets) public {
         autoRoller.roll();
 
@@ -865,9 +894,9 @@ contract AutoRollerTest is DSTestPlus {
 
     // }
 
-    // outside cooldown test
     // exxcess pts or yts
     // redeem doesn't revert
+    // decimals
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
