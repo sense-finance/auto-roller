@@ -89,8 +89,7 @@ contract TestnetDeploymentScript is Script {
         AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
             REWARDS_RECIPIENT,
-            TARGET_DURATION,
-            TARGETED_RATE
+            TARGET_DURATION
         );
 
         console2.log("Auto Roller ", address(autoRoller));

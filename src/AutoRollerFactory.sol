@@ -41,8 +41,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
     function create(
         OwnedAdapterLike adapter,
         address rewardRecipient,
-        uint256 targetDuration,
-        uint256 targetedRate
+        uint256 targetDuration
     ) external returns (AutoRoller autoRoller) {
         address target = adapter.target();
 
@@ -54,10 +53,9 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
             address(balancerVault),
             adapter,
             utils,
-            targetedRate,
             rewardRecipient
         );
-        bytes32 salt = keccak256(constructorArgs);
+        bytes32 salt = keccak256(abi.encode(constructorArgs, rollers[address(adapter)].length));
 
         autoRoller = AutoRoller(super._create(constructorArgs, salt));
 

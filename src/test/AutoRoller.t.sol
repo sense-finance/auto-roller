@@ -122,8 +122,7 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
             REWARDS_RECIPIENT,
-            TARGET_DURATION,
-            TARGETED_RATE
+            TARGET_DURATION
         );
 
         // Start multisig (admin) prank calls   
@@ -189,23 +188,34 @@ contract AutoRollerTest is DSTestPlus {
         AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
             REWARDS_RECIPIENT,
-            TARGET_DURATION,
-            targetedRate
+            TARGET_DURATION
         );
 
         target.approve(address(autoRoller), 2e18);
-        stake.approve(address(autoRoller), 0.1e18);
+        stake.approve(address(autoRoller), 0.2e18);
+
+        autoRoller.roll();
+
+        uint256 maturity = autoRoller.maturity();
+        vm.warp(maturity);
+
+        vm.mockCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector), abi.encode(targetedRate));
+        autoRoller.settle();
+
+        vm.warp(maturity + autoRoller.cooldown());
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();
 
+        maturity = autoRoller.maturity();
+
         // Check that less than 1e7 PTs & Target are leftover
-        assertApproxEq(ERC20(divider.pt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(autoRoller)), 0, 1e12);
+        assertApproxEq(ERC20(divider.pt(address(mockAdapter), maturity)).balanceOf(address(autoRoller)), 0, 1e12);
         assertApproxEq(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
 
-        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
         ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
         uint256 pti = space.pti();
 
@@ -915,10 +925,6 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(address(arFactory.utils()), address(2));
     }
 
-    // function testRedeemPreviewReversion() public {
-
-    // }
-
     function testGetNewTargetedRate() public {
         autoRoller.roll();
 
@@ -937,6 +943,10 @@ contract AutoRollerTest is DSTestPlus {
         uint256 targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
         assertEq(targetedRate, 0);
     }
+
+    // function testRedeemPreviewReversion() public {
+
+    // }
 
     // exxcess pts or yts
     // redeem doesn't revert

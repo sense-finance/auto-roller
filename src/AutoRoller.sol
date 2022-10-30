@@ -105,7 +105,7 @@ contract AutoRoller is ERC4626 {
     uint256 internal pti;
 
     uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
-    uint256 internal targetedRate; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
+    uint256 internal targetedRate   = 0; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
     uint256 internal targetDuration = 3; // Number of months or weeks in the future newly sponsored Series should mature.
 
     uint256 public cooldown         = 10 days; // Length of mandatory cooldown period during which LPs can withdraw without slippage.
@@ -119,7 +119,6 @@ contract AutoRoller is ERC4626 {
         address _balancerVault,
         OwnedAdapterLike _adapter,
         RollerUtils _utils,
-        uint256 _targetedRate,
         address _rewardRecipient
     ) ERC4626(
         _target,
@@ -147,7 +146,6 @@ contract AutoRoller is ERC4626 {
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
         owner   = msg.sender;
         utils   = _utils;
-        targetedRate = _targetedRate;
         rewardRecipient = _rewardRecipient;
     }
 
@@ -201,13 +199,21 @@ contract AutoRoller is ERC4626 {
 
         uint256 targetBal = _asset.balanceOf(address(this));
 
+        // Get the reserve balances that would imply the given targetedRate in the Space pool,
+        // assuming that we we're going to deposit the amount of Target currently in this contract.
+        // In other words, this function simulating the reserve balances that would result from the actions:
+        // 1) Use the some Target to issue PTs/YTs
+        // 2) Deposit some amount of Target
+        // 3) Swap PTs into the pool to initialize the targeted rate
+        // 4) Deposit the rest of the PTs and Target in this contract (which remain in the exact ratio the pool expects)
+        // Since we're determining the resulting reserve balances of these operations, we can issue exactly the amount of PTs we'll need to keep the ratio in the pool.
         (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
             targetedRate < 0.01e18 ? 0.01e18 : targetedRate, // Don't let the pool start below 0.01% stretched yield
             _maturity,
-            0,
-            targetBal,
-            targetBal.mulWadDown(_initScale),
-            _space.g2()
+            0, // PT reserves, starting with 0
+            targetBal, // Target reserves, starting with the entire Target balance in this contract.
+            targetBal.mulWadDown(_initScale), // Total supply, starting with Target * initScale, since that's the BPT supply if once deposit all of the Target.
+            _space.g2() // Space fee, g2 because the swap we'll make to initialize these reserve balances is PT -> Target (see https://yield.is/YieldSpace.pdf section "5 Fees").
         );
 
         uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, _initScale);
@@ -778,7 +784,8 @@ contract AutoRoller is ERC4626 {
 
     /* ========== SPACE POOL SOLVERS ========== */
 
-    /// @notice Determine the maximum number of PTs we can sell into the current space pool given the current `maxRate`.
+    /// @notice Determine the maximum number of PTs we can sell into the current space pool without
+    ///         exceeding the current `maxRate`.
     /// @return ptAmount Maximum number of PTs.
     function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) internal view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
@@ -847,19 +854,36 @@ contract RollerUtils {
 
     address internal constant DIVIDER = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
 
+    /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
+    /// @param monthsForward Number of months in to advance forward.
+    /// @return timestamp The timestamp around the number of months forward given, exactly at 00:00 UTC on the top of the month.
     function getFutureMaturity(uint256 monthsForward) public view returns (uint256) {
         (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, monthsForward));
         return DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
     }
 
-    function getSpaceData(PeripheryLike periphery, OwnedAdapterLike adapter, uint256 nextMaturity)
+    /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
+    /// @param periphery Currently active Sense Periphery contract.
+    /// @param adapter Adapter associated with the Series who's Space data this function is fetching.
+    /// @param maturity Maturity associated with the Series who's Space data this function is fetching.
+    /// @return space Space pool object associated with the given adapter and maturity.
+    /// @return poolId Balancer pool ID associated with the Space pool.
+    /// @return pti Index of the PT token in the Space pool.
+    /// @return scale Current adapter scale value.
+    function getSpaceData(PeripheryLike periphery, OwnedAdapterLike adapter, uint256 maturity)
         public returns (Space, bytes32, uint256, uint256)
     {
-        Space _space = periphery.spaceFactory().pools(address(adapter), nextMaturity);
+        Space _space = periphery.spaceFactory().pools(address(adapter), maturity);
         return (_space, _space.getPoolId(), _space.pti(), adapter.scale());
     }
 
-    function getNewTargetedRate(uint256 /* prevTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
+    /// @notice Calculate the APY implied by the change in scale over the Series term (from issuance to maturity), and stretch it to the Space pools' TS period.
+    /// @param fallbackTargetedRate Optional Target rate to fallback on if nothing can be computed.
+    /// @param adapter Adapter associated with the matured Series to analyze.
+    /// @param prevMaturity Maturity for the maturied Series to analyze.
+    /// @param space Maturity associated with the Series who's Space data this function is fetching.
+    /// @return stretchedRate Rate implied by the previous Series stretched to the Space pool's timestretch period.
+    function getNewTargetedRate(uint256 fallbackTargetedRate, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
         (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
 
         require(mscale != 0);
@@ -876,6 +900,7 @@ contract RollerUtils {
         return _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE;
     }
 
+    /// @dev Safe wad pow function for uint256s.
     function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
         require(x < 1 << 255);
         require(y < 1 << 255);
