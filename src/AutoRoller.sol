@@ -171,9 +171,10 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Sponsor a new Series, issue PTs, and migrate liquidity into the new Space pool.
     /// @dev We only expect this function to be called by this roller's adapter in the callback triggered within the adapter.openSponsorWindow call.
+    ///      Assumption: all of this Vault's LP shares will have been exited before this function is called.
     /// @param stake the adapter's stake token address.
     /// @param stakeSize the adapter's stake size.
-    function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
+    function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external {
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
         stake.safeTransferFrom(lastRoller, address(this), stakeSize);
@@ -210,6 +211,7 @@ contract AutoRoller is ERC4626 {
             _space.g2()
         );
 
+        // Calculate & issue an amount of PTs, such that all PTs are used to add liquidity while preserving the PT:Target reserve ratio in the Space Pool.
         uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, _initScale);
         divider.issue(address(adapter), _maturity, targetForIssuance);
 
@@ -265,6 +267,8 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Settle the active Series, transfer stake and ifees to the settler, and enter a cooldown phase.
+    /// @dev Because the auto-roller is the series sponsor from the Divider's perspective, this.settle is the only entrypoint for athe lastRoller to settle during the series' sponsor window.
+    ///      More info on the series lifecylce: https://docs.sense.finance/docs/series-lifecycle-detail/#phase-3-settling.
     function settle() public {
         if(msg.sender != lastRoller) revert InvalidSettler();
 
@@ -304,6 +308,7 @@ contract AutoRoller is ERC4626 {
         divider.redeem(address(adapter), maturity, pt.balanceOf(address(this))); // Burns the PTs.
         yt.collect(); // Burns the YTs.
 
+        // Calculate the initial market fixed rate for the upcoming series, using the historical avg Target rate across the previous series.
         targetedRate = utils.getNewTargetedRate(targetedRate, address(adapter), maturity, space);
 
         maturity   = MATURITY_NOT_SET;
@@ -754,7 +759,7 @@ contract AutoRoller is ERC4626 {
         return (balances[_pti], balances[1 - _pti]);
     }
 
-    /// @dev Decompose shares works to break shares into their constituent parts, 
+    /// @dev DecomposeShares works to break shares into their constituent parts, 
     ///      and also preview the assets required to mint a given number of shares.
     /// @return targetAmount Target the number of shares has a right to.
     /// @return ptAmount PTs the number of shares has a right to.
