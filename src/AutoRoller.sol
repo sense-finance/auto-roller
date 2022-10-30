@@ -12,6 +12,7 @@ import { SafeCast } from "./SafeCast.sol";
 
 import { BalancerVault } from "./interfaces/BalancerVault.sol";
 import { Space } from "./interfaces/Space.sol";
+import "forge-std/Script.sol";
 
 interface SpaceFactoryLike {
     function divider() external view returns (address);
@@ -20,6 +21,7 @@ interface SpaceFactoryLike {
 }
 
 interface DividerLike {
+    function series(address, uint256) external returns (address, uint48, address, uint96, address, uint256, uint256, uint256, uint256);
     function issue(address, uint256, uint256) external returns (uint256);
     function settleSeries(address, uint256) external;
     function mscale(address, uint256) external view returns (uint256);
@@ -103,7 +105,7 @@ contract AutoRoller is ERC4626 {
     uint256 internal pti;
 
     uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
-    uint256 internal targetedRate   = 2.9e18; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
+    uint256 internal targetedRate; // Targeted implied rate stretched to Space pool's TS period. (2.9% over 12 years ≈ 0.12% APY)
     uint256 internal targetDuration = 3; // Number of months or weeks in the future newly sponsored Series should mature.
 
     uint256 public cooldown         = 10 days; // Length of mandatory cooldown period during which LPs can withdraw without slippage.
@@ -117,6 +119,7 @@ contract AutoRoller is ERC4626 {
         address _balancerVault,
         OwnedAdapterLike _adapter,
         RollerUtils _utils,
+        uint256 _targetedRate,
         address _rewardRecipient
     ) ERC4626(
         _target,
@@ -144,6 +147,7 @@ contract AutoRoller is ERC4626 {
         ifee    = _adapter.ifee(); // Assumption: ifee will not change. Don't break this assumption and expect good things.
         owner   = msg.sender;
         utils   = _utils;
+        targetedRate = _targetedRate;
         rewardRecipient = _rewardRecipient;
     }
 
@@ -291,12 +295,15 @@ contract AutoRoller is ERC4626 {
             yt.collect(); // Burns the YTs.
         }
 
+        targetedRate = utils.getNewTargetedRate(targetedRate, address(adapter), maturity, space);
+
         maturity   = MATURITY_NOT_SET;
         lastSettle = uint32(block.timestamp);
         delete pt; delete yt; delete space; delete pti; delete poolId; delete initScale; // Re-set variables to defaults, collect gas refund.
     }
 
     /* ========== 4626 SPEC ========== */
+    // see: https://eips.ethereum.org/EIPS/eip-4626
 
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
@@ -503,7 +510,7 @@ contract AutoRoller is ERC4626 {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewWithdraw(assets);
         } else {
-            uint256 _supply = totalSupply;
+            uint256 _supply = totalSupply - firstDeposit;
 
             int256 prevGuess  = _min(assets, _supply).safeCastToInt();
             int256 prevAnswer = previewRedeem(prevGuess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
@@ -652,7 +659,7 @@ contract AutoRoller is ERC4626 {
 
         ERC20[] memory tokens = new ERC20[](2);
         tokens[1 - pti] = asset;
-        tokens[pti] = pt;
+        tokens[pti    ] = pt;
 
         _exitPool(
             poolId,
@@ -665,7 +672,7 @@ contract AutoRoller is ERC4626 {
         );
 
         uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
-        ptShare = ptShare + pt.balanceOf(address(this)) - totalPTBal;
+        ptShare += pt.balanceOf(address(this)) - totalPTBal;
 
         unchecked {
             // Safety: an inequality check is done before subtraction.
@@ -793,10 +800,6 @@ contract AutoRoller is ERC4626 {
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = data;
-        else if (what == "TARGETED_RATE") {
-            require(lastSettle == 0 || lastSettle + cooldown >= block.timestamp - 1 days);
-            targetedRate = data;
-        }
         else if (what == "TARGET_DURATION") targetDuration = data;
         else if (what == "COOLDOWN") {
             require(lastSettle == 0 || maturity != MATURITY_NOT_SET); // Can't update cooldown during cooldown period.
@@ -824,6 +827,13 @@ contract AutoRoller is ERC4626 {
 }
 
 contract RollerUtils {
+    using FixedPointMathLib for uint256;
+
+    uint256 internal constant SECONDS_PER_YEAR = 31536000;
+    uint256 internal constant ONE = 1e18;
+
+    address internal constant DIVIDER = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
+
     function getFutureMaturity(uint256 monthsForward) public view returns (uint256) {
         (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, monthsForward));
         return DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
@@ -834,5 +844,29 @@ contract RollerUtils {
     {
         Space _space = periphery.spaceFactory().pools(address(adapter), nextMaturity);
         return (_space, _space.getPoolId(), _space.pti(), adapter.scale());
+    }
+
+    function getNewTargetedRate(uint256 /* prevTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
+        (, uint48 issuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
+
+        require(mscale != 0);
+
+        if (mscale <= iscale) return 0;
+
+        // Calculate the rate implied by the growth in scale over the previous Series term.
+        uint256 rate = (_powWad(
+            (mscale - iscale).divWadDown(iscale) + ONE, ONE.divWadDown((prevMaturity - issuance) * ONE)
+        ) - ONE).mulWadDown(SECONDS_PER_YEAR * ONE);
+
+        // Stretch the targeted rate to match the Space pool's timeshift period.
+        // e.g. if the timestretch is 1/12 years in seconds, then the rate will be transformed from a yearly rate to a 12-year rate.
+        return _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE;
+    }
+
+    function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
+        require(x < 1 << 255);
+        require(y < 1 << 255);
+
+        return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }

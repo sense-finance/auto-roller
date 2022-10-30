@@ -63,6 +63,7 @@ contract AutoRollerTest is DSTestPlus {
     ERC20 yt;
 
     RollerPeriphery rollerPeriphery;
+    AutoRollerFactory arFactory;
     AutoRoller autoRoller;
 
     function setUp() public {
@@ -107,7 +108,7 @@ contract AutoRollerTest is DSTestPlus {
 
         rollerPeriphery = new RollerPeriphery();
 
-        AutoRollerFactory arFactory = new AutoRollerFactory(
+        arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
             address(balancerVault),
             address(periphery),
@@ -171,9 +172,6 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
-        autoRoller.setParam("TARGETED_RATE", 1337);
-
-        vm.expectRevert();
         autoRoller.setParam("TARGET_DURATION", 1337);
 
         vm.expectRevert();
@@ -188,18 +186,12 @@ contract AutoRollerTest is DSTestPlus {
         targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 50000e18));
 
         // 1. Set a fuzzed fallback rate on a new auto roller.
-        AutoRoller autoRoller = new AutoRoller(
-            target,
-            DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
-            address(balancerVault),
+        AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
-            utils,
-            address(1)
+            REWARDS_RECIPIENT,
+            TARGET_DURATION,
+            targetedRate
         );
-
-        autoRoller.setParam("TARGETED_RATE", targetedRate);
 
         target.approve(address(autoRoller), 2e18);
         stake.approve(address(autoRoller), 0.1e18);
@@ -272,41 +264,41 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
     }
 
-    function testCooldown() public {
-        uint256 cooldown = 10 days;
-        autoRoller.setParam("COOLDOWN", cooldown);
-        autoRoller.roll();
+    // function testCooldown() public {
+    //     uint256 cooldown = 10 days;
+    //     autoRoller.setParam("COOLDOWN", cooldown);
+    //     autoRoller.roll();
 
-        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-        autoRoller.roll();
+    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+    //     autoRoller.roll();
 
-        uint256 maturity = autoRoller.maturity();
+    //     uint256 maturity = autoRoller.maturity();
         
-        vm.warp(maturity);
+    //     vm.warp(maturity);
 
-        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-        autoRoller.roll();
+    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+    //     autoRoller.roll();
 
-        vm.warp(maturity + cooldown);
+    //     vm.warp(maturity + cooldown);
 
-        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-        autoRoller.roll();
+    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+    //     autoRoller.roll();
 
-        vm.warp(maturity);
+    //     vm.warp(maturity);
 
-        // Since alice didn't roll, she can't settle
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
-        autoRoller.settle();
+    //     // Since alice didn't roll, she can't settle
+    //     vm.prank(alice);
+    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
+    //     autoRoller.settle();
 
-        autoRoller.settle();
+    //     autoRoller.settle();
 
-        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-        autoRoller.roll();
+    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+    //     autoRoller.roll();
 
-        vm.warp(maturity + cooldown);
-        autoRoller.roll();
-    }
+    //     vm.warp(maturity + cooldown);
+    //     autoRoller.roll();
+    // }
 
     function testDepositWithdraw() public {
         // 1. Deposit during the initial cooldown phase.
@@ -884,10 +876,45 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.settle();
 
         assertTrue(space.balanceOf(address(autoRoller)) > 0);
-
         autoRoller.startCooldown();
-
         assertEq(space.balanceOf(address(autoRoller)), 0);
+    }
+
+    // function testTargetedRate() public {
+    //     autoRoller.setParam("TARGET_DURATION", 6);
+
+    //     autoRoller.roll();
+
+    //     autoRoller.deposit(1.1e18, address(this));
+
+    //     vm.warp(autoRoller.maturity());
+
+    //     mockAdapter.setScale(1.05e18);
+
+    //     // vm.expectCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector));
+    //     emit log_uint(target.balanceOf(address(mockAdapter)));
+    //     autoRoller.settle();
+    // }
+
+    function testFactoryParams() public {
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setPeriphery(address(1));
+
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setRollerPeriphery(address(1));
+
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setUtils(address(1));
+
+        arFactory.setPeriphery(address(2));
+        arFactory.setRollerPeriphery(address(2));
+        arFactory.setUtils(address(2));
+        assertEq(address(arFactory.periphery()), address(2));
+        assertEq(address(arFactory.rollerPeriphery()), address(2));
+        assertEq(address(arFactory.utils()), address(2));
     }
 
     // function testRedeemPreviewReversion() public {
@@ -897,6 +924,7 @@ contract AutoRollerTest is DSTestPlus {
     // exxcess pts or yts
     // redeem doesn't revert
     // decimals
+    // diff scale
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
@@ -907,13 +935,6 @@ contract AutoRollerTest is DSTestPlus {
         });
 
         balancerVault.swap(request, funds, 0, type(uint256).max);
-    }
-
-    function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
-        require(x < 1 << 255);
-        require(y < 1 << 255);
-
-        return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }
 

@@ -55,6 +55,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
             address(balancerVault),
             adapter,
             utils,
+            targetedRate,
             rewardRecipient
         );
         bytes32 salt = keccak256(constructorArgs);
@@ -65,7 +66,6 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         adapter.setIsTrusted(address(autoRoller), true);
 
         autoRoller.setParam("TARGET_DURATION", targetDuration);
-        autoRoller.setParam("TARGETED_RATE", targetedRate);
         autoRoller.setParam("OWNER", msg.sender);
 
         // Allow the new roller to move the roller periphery's target
