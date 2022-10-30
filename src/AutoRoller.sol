@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
@@ -20,6 +20,7 @@ interface SpaceFactoryLike {
 }
 
 interface DividerLike {
+    function series(address, uint256) external returns (address, uint48, address, uint96, address, uint256, uint256, uint256, uint256);
     function issue(address, uint256, uint256) external returns (uint256);
     function settleSeries(address, uint256) external;
     function mscale(address, uint256) external view returns (uint256);
@@ -167,9 +168,10 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Sponsor a new Series, issue PTs, and migrate liquidity into the new Space pool.
     /// @dev We only expect this function to be called by this roller's adapter in the callback triggered within the adapter.openSponsorWindow call.
+    ///      Assumption: all of this Vault's LP shares will have been exited before this function is called.
     /// @param stake the adapter's stake token address.
     /// @param stakeSize the adapter's stake size.
-    function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external { // Assumption: all of this Vault's LP shares will have been exited before this function is called.
+    function onSponsorWindowOpened(ERC20 stake, uint256 stakeSize) external {
         if (msg.sender != address(adapter)) revert OnlyAdapter();
 
         stake.safeTransferFrom(lastRoller, address(this), stakeSize);
@@ -197,15 +199,24 @@ contract AutoRoller is ERC4626 {
 
         uint256 targetBal = _asset.balanceOf(address(this));
 
+        // Get the reserve balances that would imply the given targetedRate in the Space pool,
+        // assuming that we we're going to deposit the amount of Target currently in this contract.
+        // In other words, this function simulating the reserve balances that would result from the actions:
+        // 1) Use the some Target to issue PTs/YTs
+        // 2) Deposit some amount of Target
+        // 3) Swap PTs into the pool to initialize the targeted rate
+        // 4) Deposit the rest of the PTs and Target in this contract (which remain in the exact ratio the pool expects)
+        // Since we're determining the resulting reserve balances of these operations, we can issue exactly the amount of PTs we'll need to keep the ratio in the pool.
         (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
-            targetedRate,
+            targetedRate < 0.01e18 ? 0.01e18 : targetedRate, // Don't let the pool start below 0.01% stretched yield
             _maturity,
-            0,
-            targetBal,
-            targetBal.mulWadDown(_initScale),
-            _space.g2()
+            0, // PT reserves, starting with 0
+            targetBal, // Target reserves, starting with the entire Target balance in this contract.
+            targetBal.mulWadDown(_initScale), // Total supply, starting with Target * initScale, since that's the BPT supply if once deposit all of the Target.
+            _space.g2() // Space fee, g2 because the swap we'll make to initialize these reserve balances is PT -> Target (see https://yield.is/YieldSpace.pdf section "5 Fees").
         );
 
+        // Calculate & issue an amount of PTs, such that all PTs are used to add liquidity while preserving the PT:Target reserve ratio in the Space Pool.
         uint256 targetForIssuance = _getTargetForIssuance(eqPTReserves, eqTargetReserves, targetBal, _initScale);
         divider.issue(address(adapter), _maturity, targetForIssuance);
 
@@ -261,6 +272,8 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Settle the active Series, transfer stake and ifees to the settler, and enter a cooldown phase.
+    /// @dev Because the auto-roller is the series sponsor from the Divider's perspective, this.settle is the only entrypoint for athe lastRoller to settle during the series' sponsor window.
+    ///      More info on the series lifecylce: https://docs.sense.finance/docs/series-lifecycle-detail/#phase-3-settling.
     function settle() public {
         if(msg.sender != lastRoller) revert InvalidSettler();
 
@@ -283,13 +296,25 @@ contract AutoRoller is ERC4626 {
     function startCooldown() public {
         require(divider.mscale(address(adapter), maturity) != 0);
 
-        (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
+        ERC20[] memory tokens = new ERC20[](2);
+        tokens[1 - pti] = asset;
+        tokens[pti    ] = pt;
 
-        if (isExcessPTs) {
-            divider.redeem(address(adapter), maturity, excessBal); // Burns the PTs.
-        } else {
-            yt.collect(); // Burns the YTs.
-        }
+        _exitPool(
+            poolId,
+            BalancerVault.ExitPoolRequest({
+                assets: tokens,
+                minAmountsOut: new uint256[](2),
+                userData: abi.encode(space.balanceOf(address(this))),
+                toInternalBalance: false
+            })
+        );
+
+        divider.redeem(address(adapter), maturity, pt.balanceOf(address(this))); // Burns the PTs.
+        yt.collect(); // Burns the YTs.
+
+        // Calculate the initial market fixed rate for the upcoming series, using the historical avg Target rate across the previous series.
+        targetedRate = utils.getNewTargetedRate(targetedRate, address(adapter), maturity, space);
 
         maturity   = MATURITY_NOT_SET;
         lastSettle = uint32(block.timestamp);
@@ -297,6 +322,7 @@ contract AutoRoller is ERC4626 {
     }
 
     /* ========== 4626 SPEC ========== */
+    // see: https://eips.ethereum.org/EIPS/eip-4626
 
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
@@ -503,7 +529,7 @@ contract AutoRoller is ERC4626 {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewWithdraw(assets);
         } else {
-            uint256 _supply = totalSupply;
+            uint256 _supply = totalSupply - firstDeposit;
 
             int256 prevGuess  = _min(assets, _supply).safeCastToInt();
             int256 prevAnswer = previewRedeem(prevGuess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
@@ -652,7 +678,7 @@ contract AutoRoller is ERC4626 {
 
         ERC20[] memory tokens = new ERC20[](2);
         tokens[1 - pti] = asset;
-        tokens[pti] = pt;
+        tokens[pti    ] = pt;
 
         _exitPool(
             poolId,
@@ -665,7 +691,7 @@ contract AutoRoller is ERC4626 {
         );
 
         uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
-        ptShare = ptShare + pt.balanceOf(address(this)) - totalPTBal;
+        ptShare += pt.balanceOf(address(this)) - totalPTBal;
 
         unchecked {
             // Safety: an inequality check is done before subtraction.
@@ -738,7 +764,7 @@ contract AutoRoller is ERC4626 {
         return (balances[_pti], balances[1 - _pti]);
     }
 
-    /// @dev Decompose shares works to break shares into their constituent parts, 
+    /// @dev DecomposeShares works to break shares into their constituent parts, 
     ///      and also preview the assets required to mint a given number of shares.
     /// @return targetAmount Target the number of shares has a right to.
     /// @return ptAmount PTs the number of shares has a right to.
@@ -762,16 +788,17 @@ contract AutoRoller is ERC4626 {
 
     /* ========== SPACE POOL SOLVERS ========== */
 
-    /// @notice Determine the maximum number of PTs we can sell into the current space pool given the current `maxRate`.
+    /// @notice Determine the maximum number of PTs we can sell into the current space pool without
+    ///         exceeding the current `maxRate`.
     /// @return ptAmount Maximum number of PTs.
-    function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
+    function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) internal view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
             maturity,
             ptReserves,
             targetReserves,
             spaceSupply,
-            initScale
+            space.g2()
         );
 
         return ptReserves >= eqPTReserves ? 0 : eqPTReserves - ptReserves; // Edge case: the pool is already above the max rate.
@@ -780,6 +807,8 @@ contract AutoRoller is ERC4626 {
     /* ========== ADMIN ========== */
 
     /// @notice Set address-based admin params, only callable by the owner.
+    /// @param what Admin param to update.
+    /// @param data Address to set the param to.
     function setParam(bytes32 what, address data) external {
         require(msg.sender == owner);
         if (what == "SPACE_FACTORY") spaceFactory = SpaceFactoryLike(data);
@@ -790,13 +819,11 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Set uint-based admin params, only callable by the owner.
+    /// @param what Admin param to update.
+    /// @param data Uint to set the param to.
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = data;
-        else if (what == "TARGETED_RATE") {
-            require(lastSettle == 0 || lastSettle + cooldown >= block.timestamp - 1 days);
-            targetedRate = data;
-        }
         else if (what == "TARGET_DURATION") targetDuration = data;
         else if (what == "COOLDOWN") {
             require(lastSettle == 0 || maturity != MATURITY_NOT_SET); // Can't update cooldown during cooldown period.
@@ -824,15 +851,64 @@ contract AutoRoller is ERC4626 {
 }
 
 contract RollerUtils {
+    using FixedPointMathLib for uint256;
+
+    uint256 internal constant SECONDS_PER_YEAR = 31536000;
+    uint256 internal constant ONE = 1e18;
+
+    address internal constant DIVIDER = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
+
+    /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
+    /// @param monthsForward Number of months in to advance forward.
+    /// @return timestamp The timestamp around the number of months forward given, exactly at 00:00 UTC on the top of the month.
     function getFutureMaturity(uint256 monthsForward) public view returns (uint256) {
         (uint256 year, uint256 month, ) = DateTime.timestampToDate(DateTime.addMonths(block.timestamp, monthsForward));
         return DateTime.timestampFromDateTime(year, month, 1 /* top of the month */, 0, 0, 0);
     }
 
-    function getSpaceData(PeripheryLike periphery, OwnedAdapterLike adapter, uint256 nextMaturity)
+    /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
+    /// @param periphery Currently active Sense Periphery contract.
+    /// @param adapter Adapter associated with the Series who's Space data this function is fetching.
+    /// @param maturity Maturity associated with the Series who's Space data this function is fetching.
+    /// @return space Space pool object associated with the given adapter and maturity.
+    /// @return poolId Balancer pool ID associated with the Space pool.
+    /// @return pti Index of the PT token in the Space pool.
+    /// @return scale Current adapter scale value.
+    function getSpaceData(PeripheryLike periphery, OwnedAdapterLike adapter, uint256 maturity)
         public returns (Space, bytes32, uint256, uint256)
     {
-        Space _space = periphery.spaceFactory().pools(address(adapter), nextMaturity);
+        Space _space = periphery.spaceFactory().pools(address(adapter), maturity);
         return (_space, _space.getPoolId(), _space.pti(), adapter.scale());
+    }
+
+    /// @notice Calculate the APY implied by the change in scale over the Series term (from issuance to maturity), and stretch it to the Space pools' TS period.
+    /// @param fallbackTargetedRate Optional Target rate to fallback on if nothing can be computed.
+    /// @param adapter Adapter associated with the matured Series to analyze.
+    /// @param prevMaturity Maturity for the maturied Series to analyze.
+    /// @param space Maturity associated with the Series who's Space data this function is fetching.
+    /// @return stretchedRate Rate implied by the previous Series stretched to the Space pool's timestretch period.
+    function getNewTargetedRate(uint256 fallbackTargetedRate, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
+        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
+
+        require(mscale != 0);
+
+        if (mscale <= iscale) return 0;
+
+        // Calculate the rate implied via the growth in scale over the previous Series term.
+        uint256 rate = (_powWad(
+            (mscale - iscale).divWadDown(iscale) + ONE, ONE.divWadDown((prevMaturity - prevIssuance) * ONE)
+        ) - ONE).mulWadDown(SECONDS_PER_YEAR * ONE);
+
+        // Stretch the targeted rate to match the Space pool's timeshift period.
+        // e.g. if the timestretch is 1/12 years in seconds, then the rate will be transformed from a yearly rate to a 12-year rate.
+        return _powWad(rate + ONE, ONE.divWadDown(space.ts().mulWadDown(SECONDS_PER_YEAR * ONE))) - ONE;
+    }
+
+    /// @dev Safe wad pow function for uint256s.
+    function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
+        require(x < 1 << 255);
+        require(y < 1 << 255);
+
+        return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }

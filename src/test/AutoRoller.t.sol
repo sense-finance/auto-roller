@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { Vm } from "forge-std/Vm.sol";
 import { console } from "forge-std/console.sol";
@@ -10,7 +10,7 @@ import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 
-import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
+import { BaseAdapter } from "sense-v1-core/adapters/abstract/BaseAdapter.sol";
 import { Divider, TokenHandler } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
 import { YT } from "sense-v1-core/tokens/YT.sol";
@@ -63,6 +63,7 @@ contract AutoRollerTest is DSTestPlus {
     ERC20 yt;
 
     RollerPeriphery rollerPeriphery;
+    AutoRollerFactory arFactory;
     AutoRoller autoRoller;
 
     function setUp() public {
@@ -107,7 +108,7 @@ contract AutoRollerTest is DSTestPlus {
 
         rollerPeriphery = new RollerPeriphery();
 
-        AutoRollerFactory arFactory = new AutoRollerFactory(
+        arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
             address(balancerVault),
             address(periphery),
@@ -121,8 +122,7 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
             REWARDS_RECIPIENT,
-            TARGET_DURATION,
-            TARGETED_RATE
+            TARGET_DURATION
         );
 
         // Start multisig (admin) prank calls   
@@ -171,9 +171,6 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
-        autoRoller.setParam("TARGETED_RATE", 1337);
-
-        vm.expectRevert();
         autoRoller.setParam("TARGET_DURATION", 1337);
 
         vm.expectRevert();
@@ -188,32 +185,37 @@ contract AutoRollerTest is DSTestPlus {
         targetedRate = uint88(bound(uint256(targetedRate), 0.01e18, 50000e18));
 
         // 1. Set a fuzzed fallback rate on a new auto roller.
-        AutoRoller autoRoller = new AutoRoller(
-            target,
-            DividerLike(address(divider)),
-            address(periphery),
-            address(spaceFactory),
-            address(balancerVault),
+        AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
-            utils,
-            address(1)
+            REWARDS_RECIPIENT,
+            TARGET_DURATION
         );
 
-        autoRoller.setParam("TARGETED_RATE", targetedRate);
-
         target.approve(address(autoRoller), 2e18);
-        stake.approve(address(autoRoller), 0.1e18);
+        stake.approve(address(autoRoller), 0.2e18);
+
+        autoRoller.roll();
+
+        uint256 maturity = autoRoller.maturity();
+        vm.warp(maturity);
+
+        vm.mockCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector), abi.encode(targetedRate));
+        autoRoller.settle();
+
+        vm.warp(maturity + autoRoller.cooldown());
 
         mockAdapter.setIsTrusted(address(autoRoller), true);
 
         // 2. Roll Target into the first Series.
         autoRoller.roll();
 
+        maturity = autoRoller.maturity();
+
         // Check that less than 1e7 PTs & Target are leftover
-        assertApproxEq(ERC20(divider.pt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(autoRoller)), 0, 1e12);
+        assertApproxEq(ERC20(divider.pt(address(mockAdapter), maturity)).balanceOf(address(autoRoller)), 0, 1e12);
         assertApproxEq(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
 
-        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
         ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
         uint256 pti = space.pti();
 
@@ -230,6 +232,12 @@ contract AutoRollerTest is DSTestPlus {
 
         uint256 targetBalPre = target.balanceOf(address(this));
         uint256 stakeBalPre = stake.balanceOf(address(this));
+
+        // Can't open sponsor window directly
+        (, , uint256 stakeSize) = mockAdapter.getStakeAndTarget();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.OnlyAdapter.selector));
+        autoRoller.onSponsorWindowOpened(ERC20(address(stake)), stakeSize);
+
         // 2. Roll into the first Series.
         autoRoller.roll();
         uint256 targetBalPost = target.balanceOf(address(this));
@@ -248,6 +256,11 @@ contract AutoRollerTest is DSTestPlus {
     function testEject() public {
         // 1. Deposit during the initial cooldown phase.
         autoRoller.deposit(1e18, address(this));
+
+        // Can only eject during an active phase
+        uint256 shareBal = autoRoller.balanceOf(address(this));
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.ActivePhaseOnly.selector));
+        autoRoller.eject(shareBal, address(this), address(this));
 
         // 2. Roll into the first Series.
         autoRoller.roll();
@@ -282,6 +295,11 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.roll();
 
         vm.warp(maturity);
+
+        // Since alice didn't roll, she can't settle
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
+        autoRoller.settle();
 
         autoRoller.settle();
 
@@ -366,6 +384,35 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(maxm, 0);
     }
 
+    function testClaimRewards() public {
+        autoRoller.roll();
+
+        MockERC20 rewardToken = new MockERC20("RewardsToken", "RT", 18);
+
+        uint256 MINT_AMT = 1.1e18;
+        rewardToken.mint(address(autoRoller), MINT_AMT);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        ERC20 yt = ERC20(divider.yt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(target)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(pt)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(yt)));
+
+        vm.expectRevert();
+        autoRoller.claimRewards(ERC20(address(space)));
+
+        assertEq(rewardToken.balanceOf(REWARDS_RECIPIENT), 0);
+        autoRoller.claimRewards(ERC20(address(rewardToken)));
+        assertEq(rewardToken.balanceOf(REWARDS_RECIPIENT), MINT_AMT);
+    }
+
     function testFuzzMaxWithdraw(uint256 assets) public {
         autoRoller.roll();
 
@@ -402,8 +449,31 @@ contract AutoRollerTest is DSTestPlus {
         vm.stopPrank();
 
         assertGt(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
+
+        vm.warp(autoRoller.maturity());
+        autoRoller.settle();
+
+        assertEq(autoRoller.totalAssets(), autoRoller.previewRedeem(autoRoller.totalSupply()));
     }
 
+    function testFuzzMintRedeemCooldown(uint256 assets) public {
+        assets = bound(assets, 0.01e18, 100e18);
+
+        target.mint(alice, assets);
+
+        vm.prank(alice);
+        target.approve(address(autoRoller), assets);
+
+        uint256 previewedMint = autoRoller.previewMint(assets);
+        vm.prank(alice);
+        uint256 actualMint = autoRoller.mint(assets, alice);
+        assertEq(actualMint, previewedMint);
+
+        uint256 previewedRedeem = autoRoller.previewRedeem(actualMint);
+        vm.prank(alice);
+        uint256 actualRedeem = autoRoller.redeem(actualMint, alice, alice);
+        assertEq(actualRedeem, previewedRedeem);
+    }
 
     // The following tests are adapted from Solmate's ERC4626 testing suite
 
@@ -794,37 +864,93 @@ contract AutoRollerTest is DSTestPlus {
         rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal);
     }
 
+    function testExternalSettlement() public {
+        autoRoller.roll();
 
-    // function testExternalSettlement() public {
-    //     autoRoller.roll();
+        autoRoller.deposit(1.1e18, address(this));
 
-    //     autoRoller.deposit(1.1e18, address(this));
-
-    //     uint256 maturity = autoRoller.maturity();
+        uint256 maturity = autoRoller.maturity();
         
-    //     vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
+        vm.warp(maturity + divider.SPONSOR_WINDOW() + 1);
 
-    //     divider.settleSeries(address(mockAdapter), maturity);
+        // Series must be settled for cooldown
+        vm.expectRevert();
+        autoRoller.startCooldown();
 
-    //     Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
+        divider.settleSeries(address(mockAdapter), maturity);
 
-    //     vm.expectRevert(SenseCoreErrors.AlreadySettled.selector);
-    //     autoRoller.settle();
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
 
-    //     assertTrue(space.balanceOf(address(autoRoller)) > 0);
+        vm.expectRevert(SenseCoreErrors.AlreadySettled.selector);
+        autoRoller.settle();
 
-    //     autoRoller.startCooldown();
+        assertTrue(space.balanceOf(address(autoRoller)) > 0);
+        autoRoller.startCooldown();
+        assertEq(space.balanceOf(address(autoRoller)), 0);
+    }
 
-    //     assertEq(space.balanceOf(address(autoRoller)), 0);
-    // }
+    function testTargetedRate() public {
+        autoRoller.setParam("TARGET_DURATION", 6);
+
+        autoRoller.roll();
+
+        autoRoller.deposit(1.1e18, address(this));
+
+        vm.warp(autoRoller.maturity());
+
+        mockAdapter.setScale(1.05e18);
+
+        vm.expectCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector));
+        autoRoller.settle();
+    }
+
+    function testFactoryParams() public {
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setPeriphery(address(1));
+
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setRollerPeriphery(address(1));
+
+        vm.expectRevert("UNTRUSTED");
+        vm.prank(alice);
+        arFactory.setUtils(address(1));
+
+        arFactory.setPeriphery(address(2));
+        arFactory.setRollerPeriphery(address(2));
+        arFactory.setUtils(address(2));
+        assertEq(address(arFactory.periphery()), address(2));
+        assertEq(address(arFactory.rollerPeriphery()), address(2));
+        assertEq(address(arFactory.utils()), address(2));
+    }
+
+    function testGetNewTargetedRate() public {
+        autoRoller.roll();
+
+        uint256 maturity = autoRoller.maturity();
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
+
+        // Can't get new targeted rate before maturity.
+        vm.expectRevert();
+        utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
+
+        vm.warp(maturity);
+        autoRoller.settle();
+
+        // Targeted rate is 0 if scale has gone down.
+        mockAdapter.setScale(0.9e18);
+        uint256 targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
+        assertEq(targetedRate, 0);
+    }
 
     // function testRedeemPreviewReversion() public {
 
     // }
 
-    // outside cooldown test
     // exxcess pts or yts
     // redeem doesn't revert
+    // decimals
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
@@ -835,13 +961,6 @@ contract AutoRollerTest is DSTestPlus {
         });
 
         balancerVault.swap(request, funds, 0, type(uint256).max);
-    }
-
-    function _powWad(uint256 x, uint256 y) internal pure returns (uint256) {
-        require(x < 1 << 255);
-        require(y < 1 << 255);
-
-        return uint256(FixedPointMathLib.powWad(int256(x), int256(y))); // Assumption: x cannot be negative so this result will never be.
     }
 }
 

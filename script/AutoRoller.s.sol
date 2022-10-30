@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import "forge-std/Script.sol";
 
@@ -89,8 +89,7 @@ contract TestnetDeploymentScript is Script {
         AutoRoller autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
             REWARDS_RECIPIENT,
-            TARGET_DURATION,
-            TARGETED_RATE
+            TARGET_DURATION
         );
 
         console2.log("Auto Roller ", address(autoRoller));

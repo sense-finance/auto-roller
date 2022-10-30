@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 
 import { Trust } from "sense-v1-utils/Trust.sol";
-import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
+import { BaseAdapter } from "sense-v1-core/adapters/abstract/BaseAdapter.sol";
 
 import { AutoRoller, SpaceFactoryLike } from "../../AutoRoller.sol";
 
