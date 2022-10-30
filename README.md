@@ -19,7 +19,8 @@ Here are some important concepts to understand so you know how the auto-roller w
 
 ### Contracts
 * `AutoRoller` - the ERC4626 vault that owns a unique sense adapter and permits unprotected LP actions.
-* `AutoRollerFactory` - onchain factory for easy deployment of new auto-roller instances.
+* `AutoRollerFactory` - on-chain factory for easy deployment of new auto-roller instances.
+
 * `RollerPeriphery` - the slippage protected LP management interface to all AutoRollers.
 * `OwnableAdapter` - Sense adapter owned by a unique auto-roller. Through the auto-roller, series rollers can sponsor new series via `AutoRoller.roll` and settle series via `AutoRoller.settle`.
 
