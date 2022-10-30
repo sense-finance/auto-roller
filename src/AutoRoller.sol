@@ -882,12 +882,12 @@ contract RollerUtils {
     }
 
     /// @notice Calculate the APY implied by the change in scale over the Series term (from issuance to maturity), and stretch it to the Space pools' TS period.
-    /// @param fallbackTargetedRate Optional Target rate to fallback on if nothing can be computed.
+    /// @ param fallbackTargetedRate Optional Target rate to fallback on if nothing can be computed.
     /// @param adapter Adapter associated with the matured Series to analyze.
     /// @param prevMaturity Maturity for the maturied Series to analyze.
     /// @param space Maturity associated with the Series who's Space data this function is fetching.
     /// @return stretchedRate Rate implied by the previous Series stretched to the Space pool's timestretch period.
-    function getNewTargetedRate(uint256 fallbackTargetedRate, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
+    function getNewTargetedRate(uint256 /* fallbackTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
         (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
 
         require(mscale != 0);
