@@ -796,6 +796,8 @@ contract AutoRoller is ERC4626 {
     /* ========== ADMIN ========== */
 
     /// @notice Set address-based admin params, only callable by the owner.
+    /// @param what Admin param to update.
+    /// @param data Address to set the param to.
     function setParam(bytes32 what, address data) external {
         require(msg.sender == owner);
         if (what == "SPACE_FACTORY") spaceFactory = SpaceFactoryLike(data);
@@ -806,6 +808,8 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Set uint-based admin params, only callable by the owner.
+    /// @param what Admin param to update.
+    /// @param data Uint to set the param to.
     function setParam(bytes32 what, uint256 data) external {
         require(msg.sender == owner);
         if (what == "MAX_RATE") maxRate = data;
@@ -856,7 +860,7 @@ contract RollerUtils {
     }
 
     function getNewTargetedRate(uint256 /* prevTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
-        (, uint48 issuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
+        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
 
         require(mscale != 0);
 
@@ -864,7 +868,7 @@ contract RollerUtils {
 
         // Calculate the rate implied via the growth in scale over the previous Series term.
         uint256 rate = (_powWad(
-            (mscale - iscale).divWadDown(iscale) + ONE, ONE.divWadDown((prevMaturity - issuance) * ONE)
+            (mscale - iscale).divWadDown(iscale) + ONE, ONE.divWadDown((prevMaturity - prevIssuance) * ONE)
         ) - ONE).mulWadDown(SECONDS_PER_YEAR * ONE);
 
         // Stretch the targeted rate to match the Space pool's timeshift period.
