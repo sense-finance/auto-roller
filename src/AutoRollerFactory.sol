@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 
@@ -7,9 +7,6 @@ import { Trust } from "sense-v1-utils/Trust.sol";
 
 import { AutoRoller, DividerLike, OwnedAdapterLike, RollerUtils, PeripheryLike } from "./AutoRoller.sol";
 import { BaseSplitCodeFactory } from "./BaseSplitCodeFactory.sol";
-
-// immutable target date
-// compute address vs registry
 
 interface RollerPeripheryLike {
     function approve(ERC20,address,uint256) external;
@@ -22,6 +19,8 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
     PeripheryLike       public periphery;
     RollerPeripheryLike public rollerPeriphery;
     RollerUtils         public utils;
+
+    mapping(address => AutoRoller[]) public rollers;
 
     /// @dev `_creationCode` should equal `type(AutoRoller).creationCode`
     constructor(
@@ -70,6 +69,8 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
 
         // Allow the new roller to move the roller periphery's target
         rollerPeriphery.approve(ERC20(target), address(autoRoller), type(uint256).max);
+
+        rollers[address(adapter)].push(autoRoller);
 
         emit RollerCreated(address(adapter), address(autoRoller));
     }
