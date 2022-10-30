@@ -79,9 +79,10 @@ contract RollerPeriphery {
     }
 
     /// @notice Quick exit into the constituent assets with slippage protection
+    /// @param vault ERC4626 vault.
     /// @param shares Number of shares to eject with.
     /// @param receiver Destination address for the constituent assets.
-    /// @param minAssetsout Minimum amount of assets returned
+    /// @param minAssetsOut Minimum amount of assets returned
     /// @param minExcessOut Minimum excess PT/YT returned 
     /// @return assets Amount of asset redeemable by the given number of shares.
     /// @return excessBal Amount of excess PT or YT redeemable by the given number of shares.
