@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { Vm } from "forge-std/Vm.sol";
 import { console } from "forge-std/console.sol";
@@ -10,7 +10,7 @@ import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 
-import { BaseAdapter } from "sense-v1-core/adapters/BaseAdapter.sol";
+import { BaseAdapter } from "sense-v1-core/adapters/abstract/BaseAdapter.sol";
 import { Divider, TokenHandler } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
 import { YT } from "sense-v1-core/tokens/YT.sol";
@@ -264,41 +264,41 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
     }
 
-    // function testCooldown() public {
-    //     uint256 cooldown = 10 days;
-    //     autoRoller.setParam("COOLDOWN", cooldown);
-    //     autoRoller.roll();
+    function testCooldown() public {
+        uint256 cooldown = 10 days;
+        autoRoller.setParam("COOLDOWN", cooldown);
+        autoRoller.roll();
 
-    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-    //     autoRoller.roll();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
 
-    //     uint256 maturity = autoRoller.maturity();
+        uint256 maturity = autoRoller.maturity();
         
-    //     vm.warp(maturity);
+        vm.warp(maturity);
 
-    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-    //     autoRoller.roll();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
 
-    //     vm.warp(maturity + cooldown);
+        vm.warp(maturity + cooldown);
 
-    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-    //     autoRoller.roll();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
 
-    //     vm.warp(maturity);
+        vm.warp(maturity);
 
-    //     // Since alice didn't roll, she can't settle
-    //     vm.prank(alice);
-    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
-    //     autoRoller.settle();
+        // Since alice didn't roll, she can't settle
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.InvalidSettler.selector));
+        autoRoller.settle();
 
-    //     autoRoller.settle();
+        autoRoller.settle();
 
-    //     vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
-    //     autoRoller.roll();
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.RollWindowNotOpen.selector));
+        autoRoller.roll();
 
-    //     vm.warp(maturity + cooldown);
-    //     autoRoller.roll();
-    // }
+        vm.warp(maturity + cooldown);
+        autoRoller.roll();
+    }
 
     function testDepositWithdraw() public {
         // 1. Deposit during the initial cooldown phase.
@@ -854,7 +854,6 @@ contract AutoRollerTest is DSTestPlus {
         rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal);
     }
 
-
     function testExternalSettlement() public {
         autoRoller.roll();
 
@@ -880,21 +879,20 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(space.balanceOf(address(autoRoller)), 0);
     }
 
-    // function testTargetedRate() public {
-    //     autoRoller.setParam("TARGET_DURATION", 6);
+    function testTargetedRate() public {
+        autoRoller.setParam("TARGET_DURATION", 6);
 
-    //     autoRoller.roll();
+        autoRoller.roll();
 
-    //     autoRoller.deposit(1.1e18, address(this));
+        autoRoller.deposit(1.1e18, address(this));
 
-    //     vm.warp(autoRoller.maturity());
+        vm.warp(autoRoller.maturity());
 
-    //     mockAdapter.setScale(1.05e18);
+        mockAdapter.setScale(1.05e18);
 
-    //     // vm.expectCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector));
-    //     emit log_uint(target.balanceOf(address(mockAdapter)));
-    //     autoRoller.settle();
-    // }
+        vm.expectCall(address(utils), abi.encodeWithSelector(utils.getNewTargetedRate.selector));
+        autoRoller.settle();
+    }
 
     function testFactoryParams() public {
         vm.expectRevert("UNTRUSTED");
@@ -921,10 +919,28 @@ contract AutoRollerTest is DSTestPlus {
 
     // }
 
+    function testGetNewTargetedRate() public {
+        autoRoller.roll();
+
+        uint256 maturity = autoRoller.maturity();
+        Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
+
+        // Can't get new targeted rate before maturity.
+        vm.expectRevert();
+        utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
+
+        vm.warp(maturity);
+        autoRoller.settle();
+
+        // Targeted rate is 0 if scale has gone down.
+        mockAdapter.setScale(0.9e18);
+        uint256 targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
+        assertEq(targetedRate, 0);
+    }
+
     // exxcess pts or yts
     // redeem doesn't revert
     // decimals
-    // diff scale
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({

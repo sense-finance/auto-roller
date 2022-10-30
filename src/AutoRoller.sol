@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.11;
+pragma solidity 0.8.13;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
@@ -202,7 +202,7 @@ contract AutoRoller is ERC4626 {
         uint256 targetBal = _asset.balanceOf(address(this));
 
         (uint256 eqPTReserves, uint256 eqTargetReserves) = _space.getEQReserves(
-            targetedRate,
+            targetedRate < 0.01e18 ? 0.01e18 : targetedRate, // Don't let the pool start below 0.01% stretched yield
             _maturity,
             0,
             targetBal,
@@ -287,13 +287,22 @@ contract AutoRoller is ERC4626 {
     function startCooldown() public {
         require(divider.mscale(address(adapter), maturity) != 0);
 
-        (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(totalSupply);
+        ERC20[] memory tokens = new ERC20[](2);
+        tokens[1 - pti] = asset;
+        tokens[pti    ] = pt;
 
-        if (isExcessPTs) {
-            divider.redeem(address(adapter), maturity, excessBal); // Burns the PTs.
-        } else {
-            yt.collect(); // Burns the YTs.
-        }
+        _exitPool(
+            poolId,
+            BalancerVault.ExitPoolRequest({
+                assets: tokens,
+                minAmountsOut: new uint256[](2),
+                userData: abi.encode(space.balanceOf(address(this))),
+                toInternalBalance: false
+            })
+        );
+
+        divider.redeem(address(adapter), maturity, pt.balanceOf(address(this))); // Burns the PTs.
+        yt.collect(); // Burns the YTs.
 
         targetedRate = utils.getNewTargetedRate(targetedRate, address(adapter), maturity, space);
 
@@ -771,14 +780,14 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Determine the maximum number of PTs we can sell into the current space pool given the current `maxRate`.
     /// @return ptAmount Maximum number of PTs.
-    function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) public view returns (uint256) {
+    function _maxPTSell(uint256 ptReserves, uint256 targetReserves, uint256 spaceSupply) internal view returns (uint256) {
         (uint256 eqPTReserves, ) = space.getEQReserves(
             maxRate, // Max acceptable implied rate.
             maturity,
             ptReserves,
             targetReserves,
             spaceSupply,
-            initScale
+            space.g2()
         );
 
         return ptReserves >= eqPTReserves ? 0 : eqPTReserves - ptReserves; // Edge case: the pool is already above the max rate.
@@ -853,7 +862,7 @@ contract RollerUtils {
 
         if (mscale <= iscale) return 0;
 
-        // Calculate the rate implied by the growth in scale over the previous Series term.
+        // Calculate the rate implied via the growth in scale over the previous Series term.
         uint256 rate = (_powWad(
             (mscale - iscale).divWadDown(iscale) + ONE, ONE.divWadDown((prevMaturity - issuance) * ONE)
         ) - ONE).mulWadDown(SECONDS_PER_YEAR * ONE);
