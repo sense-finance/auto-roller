@@ -12,7 +12,6 @@ import { SafeCast } from "./SafeCast.sol";
 
 import { BalancerVault } from "./interfaces/BalancerVault.sol";
 import { Space } from "./interfaces/Space.sol";
-import "forge-std/Script.sol";
 
 interface SpaceFactoryLike {
     function divider() external view returns (address);
