@@ -168,6 +168,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.setParam("OWNER", address(0xbabe));
 
         vm.expectRevert();
+        autoRoller.setParam("UNKNOWN", address(0xbabe));
+
+        vm.expectRevert();
         autoRoller.setParam("MAX_RATE", 1337);
 
         vm.expectRevert();
@@ -175,6 +178,9 @@ contract AutoRollerTest is DSTestPlus {
 
         vm.expectRevert();
         autoRoller.setParam("COOLDOWN", 1337);
+
+        vm.expectRevert();
+        autoRoller.setParam("UNKNOWN", 1337);
 
         (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
         // Check that no storage slots were written to
@@ -936,12 +942,31 @@ contract AutoRollerTest is DSTestPlus {
         utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
 
         vm.warp(maturity);
+        
+        // Scale goes down
+        mockAdapter.setScale(0.9e18);
         autoRoller.settle();
 
         // Targeted rate is 0 if scale has gone down.
-        mockAdapter.setScale(0.9e18);
         uint256 targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
         assertEq(targetedRate, 0);
+
+        vm.warp(maturity + autoRoller.cooldown());
+
+        // Roll into new series
+        autoRoller.roll();
+
+        // Scale goes up
+        mockAdapter.setScale(1.9e18);
+        
+        maturity = autoRoller.maturity();
+        vm.warp(maturity);
+
+        autoRoller.settle();
+
+        // Targeted rate is not 0 TODO: maybe assert against the rate that should be 
+        targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
+        assertGt(targetedRate, 0);
     }
 
     // function testRedeemPreviewReversion() public {
@@ -951,6 +976,156 @@ contract AutoRollerTest is DSTestPlus {
     // exxcess pts or yts
     // redeem doesn't revert
     // decimals
+
+    // OTHER TESTS (LINES NOT COVERED ACCORDING CODECOV) TODO: re-order these tests
+    function testAfterDepositWithOnlyTargetLiquidity() public {
+        // The idea is making a test that covers line case on the `afterDeposit` function
+        // where `if (assets - targetToJoin > 0)` is false.
+        // I think can never happen since `onSponsorWindowOpened`, when calling `_space.getEQReserves`
+        // we are doing `targetedRate < 0.01e18 ? 0.01e18 : targetedRate` which means that we are always
+        // getting a `eqPTReserves` > 0 so we will be issuing PTs. 
+    }
+
+    function testDepositWithdrawWithYTsExcess() public {
+        // 1. Deposit during the initial cooldown phase.
+        autoRoller.deposit(0.2e18, address(this));
+        assertEq(autoRoller.balanceOf(address(this)), 0.2e18);
+
+        // 3. Roll the Target into the first Series.
+        autoRoller.roll();
+
+        // 4. Deposit during the first active phase.
+        autoRoller.deposit(0.3e18, address(this));
+        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
+
+        // 5. Redeem all shares while still in the active phase.
+        uint256 targetBalPre = target.balanceOf(address(this));
+        vm.expectCall(address(periphery), abi.encodeWithSelector(periphery.swapYTsForTarget.selector));
+        autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
+        uint256 targetBalPost = target.balanceOf(address(this));
+        // assertRelApproxEq(targetBalPost - targetBalPre, 0.5e18, 0.0001e18 /* 0.01% */); // TODO: what should t be the expected value?
+
+        // Check that the Target dust leftover is small
+        assertLt(target.balanceOf(address(autoRoller)), 1e9);
+    }
+
+    function testPreviewWithdrawInsufficentLiquidity(uint256 amount) public {
+        // 1. Roll into the first Series.
+        autoRoller.roll();
+
+        // 2. Make a deposit.
+        autoRoller.deposit(1e18, address(this));
+
+        // 3. Expect revert because of InsufficientLiquidity.
+        vm.expectRevert(abi.encodeWithSelector(AutoRoller.InsufficientLiquidity.selector));
+        autoRoller.previewWithdraw(100e18);
+    }
+
+    function testMaxWithdrawDuringCooldown(uint256 amount) public {
+        // 1. Make a deposit durring cooldown.
+        autoRoller.deposit(1e18, address(this));
+
+        // 2. Assert max withdraw is same as deposit.
+        uint256 maxWithdraw = autoRoller.maxWithdraw(address(this));
+        assertEq(maxWithdraw, 1e18);
+    }
+
+    function testMaxRedeemDuringCooldown(uint256 amount) public {
+        // 1. Make a deposit durring cooldown.
+        autoRoller.deposit(1e18, address(this));
+
+        // 2. Assert max withdraw is same as deposit.
+        uint256 maxRedeem = autoRoller.maxRedeem(address(this));
+        assertEq(maxRedeem, 1e18);
+    }
+
+    function testMaxRedeemWithPTsExcess(uint256 amount) public {
+        // 1. Make a deposit durring cooldown.
+        autoRoller.deposit(1e18, address(this));
+
+        // 2. Roll into the first Series.
+        autoRoller.roll();
+
+        // 3. Swap PTs in to generate excess of PTs.
+        target.mint(address(this), 1e18);
+        target.approve(address(divider), 1e18);
+        divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        pt.approve(address(balancerVault), 1e18);
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: space.getPoolId(),
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(pt),
+                assetOut: address(autoRoller.asset()),
+                amount: 0.001e18,
+                userData: hex""
+            })
+        );
+
+        // 4. Assert max redeem is same as deposit.
+        uint256 maxRedeem = autoRoller.maxRedeem(address(this));
+        assertEq(maxRedeem, 1e18);
+
+        // 5. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
+        // is more than the diff between YTs and PTs.
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: space.getPoolId(),
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(pt),
+                assetOut: address(autoRoller.asset()),
+                amount: 0.1e18, // TODO: how do I calculate a number such that it would make the maxPTSale >= diff? This number works though
+                userData: hex""
+            })
+        );
+
+        // 6. Assert max redeem is TODO.
+        maxRedeem = autoRoller.maxRedeem(address(this));
+        // TODO: assertEq(maxRedeem, 123);
+
+        // 7. TODO: add missing scenario: `if (ptReserves >= diff)`.
+    }
+
+    function testEjectWithPTsExcess() public {
+        // 1. Deposit during the initial cooldown phase.
+        autoRoller.deposit(1e18, address(this));
+
+        // 2. Roll into the first Series.
+        autoRoller.roll();
+
+        // 3. Swap PTs in to generate excess of PTs.
+        target.mint(address(this), 1e18);
+        target.approve(address(divider), 1e18);
+        divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
+
+        ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+
+        pt.approve(address(balancerVault), 1e18);
+        _swap(
+            BalancerVault.SingleSwap({
+                poolId: space.getPoolId(),
+                kind: BalancerVault.SwapKind.GIVEN_IN,
+                assetIn: address(pt),
+                assetOut: address(autoRoller.asset()),
+                amount: 0.001e18,
+                userData: hex""
+            })
+        );
+
+        // 4. Eject everything.
+        uint256 ptBalBefore = pt.balanceOf(address(this));
+        ( , uint256 excessBal, bool isExcessPTs) = autoRoller.eject(autoRoller.balanceOf(address(this)), address(this), address(this));
+
+        // Expect just a little PT excess.
+        assertBoolEq(isExcessPTs, true);
+        assertLt(excessBal, 1e16);
+        assertEq(excessBal, pt.balanceOf(address(this)) - ptBalBefore);
+    }
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({

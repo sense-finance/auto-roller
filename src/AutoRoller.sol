@@ -76,7 +76,7 @@ contract AutoRoller is ERC4626 {
 
     DividerLike      internal immutable divider;
     BalancerVault    internal immutable balancerVault;
-    OwnedAdapterLike internal immutable adapter;
+    OwnedAdapterLike internal immutable adapter; // This adapter must **override** `getMaturityBounds` so only the roller can sponsor preventing a potential DoS attack.
 
     uint256 internal immutable ifee; // Cached issuance fee.
     uint256 internal immutable minSwapAmount; // Min number of PTs that can be swapped out when exiting.
@@ -200,9 +200,9 @@ contract AutoRoller is ERC4626 {
         uint256 targetBal = _asset.balanceOf(address(this));
 
         // Get the reserve balances that would imply the given targetedRate in the Space pool,
-        // assuming that we we're going to deposit the amount of Target currently in this contract.
+        // assuming that we're going to deposit the amount of Target currently in this contract.
         // In other words, this function simulating the reserve balances that would result from the actions:
-        // 1) Use the some Target to issue PTs/YTs
+        // 1) Use some Target to issue PTs/YTs
         // 2) Deposit some amount of Target
         // 3) Swap PTs into the pool to initialize the targeted rate
         // 4) Deposit the rest of the PTs and Target in this contract (which remain in the exact ratio the pool expects)
@@ -272,7 +272,7 @@ contract AutoRoller is ERC4626 {
     }
 
     /// @notice Settle the active Series, transfer stake and ifees to the settler, and enter a cooldown phase.
-    /// @dev Because the auto-roller is the series sponsor from the Divider's perspective, this.settle is the only entrypoint for athe lastRoller to settle during the series' sponsor window.
+    /// @dev Because the auto-roller is the series sponsor from the Divider's perspective, this.settle is the only entrypoint for the lastRoller to settle during the series' sponsor window.
     ///      More info on the series lifecylce: https://docs.sense.finance/docs/series-lifecycle-detail/#phase-3-settling.
     function settle() public {
         if(msg.sender != lastRoller) revert InvalidSettler();
@@ -369,7 +369,7 @@ contract AutoRoller is ERC4626 {
 
             balances[1 - _pti] = targetToJoin;
 
-            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity.
+            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity. TODO: can this ever happen?
                 balances[_pti] = divider.issue(address(adapter), maturity, assets - targetToJoin);
             }
 

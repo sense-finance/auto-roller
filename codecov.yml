@@ -1,0 +1,5 @@
+# interfaces are automatically ignored by forge coverage
+ignore:
+  - "**/tests/**/*"                         # ignore all files inside tests/ folder
+  - "**/**.t*.sol"                          # ignore all files ending in t*.sol
+  - "**/scripts/**/*"                       # ignore all files inside scripts/ folder
