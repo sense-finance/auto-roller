@@ -152,6 +152,42 @@ contract AutoRollerTest is DSTestPlus {
 
     // Auth
 
+    function testUpdateAdminParams() public {
+        vm.record();
+
+        // 1. Impersonate owner and try to update admin params
+        vm.startPrank(address(this));
+
+        autoRoller.setParam("SPACE_FACTORY", address(0xbabe));
+
+        autoRoller.setParam("PERIPHERY", address(0xbabe));
+
+        vm.expectRevert();
+        autoRoller.setParam("UNKNOWN", address(0xbabe));
+
+        autoRoller.setParam("OWNER", address(0xbabe));
+
+        vm.stopPrank();
+
+        // 2. Impersonate new owner try to update rest of admin params
+        vm.startPrank(address(0xbabe));
+
+        autoRoller.setParam("MAX_RATE", 1337);
+
+        autoRoller.setParam("TARGET_DURATION", 1337);
+
+        autoRoller.setParam("COOLDOWN", 1337);
+
+        vm.expectRevert();
+        autoRoller.setParam("UNKNOWN", 1337);
+
+        vm.stopPrank();
+
+        (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
+        // Check that no storage slots were written to
+        assertEq(writes.length, 6);
+    }
+
     function testFuzzUpdateAdminParams(address lad) public {
         vm.record();
         vm.assume(lad != address(this)); // For any address other than the testing contract
@@ -969,44 +1005,14 @@ contract AutoRollerTest is DSTestPlus {
         assertGt(targetedRate, 0);
     }
 
-    // function testRedeemPreviewReversion() public {
+    // OTHER TESTS (LINES NOT COVERED ACCORDING CODECOV) TODO: re-order these tests?
 
-    // }
-
-    // exxcess pts or yts
-    // redeem doesn't revert
-    // decimals
-
-    // OTHER TESTS (LINES NOT COVERED ACCORDING CODECOV) TODO: re-order these tests
     function testAfterDepositWithOnlyTargetLiquidity() public {
         // The idea is making a test that covers line case on the `afterDeposit` function
         // where `if (assets - targetToJoin > 0)` is false.
         // I think can never happen since `onSponsorWindowOpened`, when calling `_space.getEQReserves`
         // we are doing `targetedRate < 0.01e18 ? 0.01e18 : targetedRate` which means that we are always
         // getting a `eqPTReserves` > 0 so we will be issuing PTs. 
-    }
-
-    function testDepositWithdrawWithYTsExcess() public {
-        // 1. Deposit during the initial cooldown phase.
-        autoRoller.deposit(0.2e18, address(this));
-        assertEq(autoRoller.balanceOf(address(this)), 0.2e18);
-
-        // 3. Roll the Target into the first Series.
-        autoRoller.roll();
-
-        // 4. Deposit during the first active phase.
-        autoRoller.deposit(0.3e18, address(this));
-        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
-
-        // 5. Redeem all shares while still in the active phase.
-        uint256 targetBalPre = target.balanceOf(address(this));
-        vm.expectCall(address(periphery), abi.encodeWithSelector(periphery.swapYTsForTarget.selector));
-        autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
-        uint256 targetBalPost = target.balanceOf(address(this));
-        // assertRelApproxEq(targetBalPost - targetBalPre, 0.5e18, 0.0001e18 /* 0.01% */); // TODO: what should t be the expected value?
-
-        // Check that the Target dust leftover is small
-        assertLt(target.balanceOf(address(autoRoller)), 1e9);
     }
 
     function testPreviewWithdrawInsufficentLiquidity(uint256 amount) public {
@@ -1030,18 +1036,54 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(maxWithdraw, 1e18);
     }
 
-    function testMaxRedeemDuringCooldown(uint256 amount) public {
-        // 1. Make a deposit durring cooldown.
-        autoRoller.deposit(1e18, address(this));
+    function testRedeemWithYTsExcess() public {
+        // 1. Deposit during the initial cooldown phase.
+        autoRoller.deposit(0.2e18, address(this));
+        assertEq(autoRoller.balanceOf(address(this)), 0.2e18);
 
-        // 2. Assert max withdraw is same as deposit.
-        uint256 maxRedeem = autoRoller.maxRedeem(address(this));
-        assertEq(maxRedeem, 1e18);
+        // 3. Roll the Target into the first Series.
+        autoRoller.roll();
+
+        // 4. Deposit during the first active phase.
+        autoRoller.deposit(0.3e18, address(this));
+        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
+
+        // 5. Redeem all shares while still in the active phase.
+        uint256 targetBalPre = target.balanceOf(address(this));
+        vm.expectCall(address(periphery), abi.encodeWithSelector(periphery.swapYTsForTarget.selector));
+        autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
+        uint256 targetBalPost = target.balanceOf(address(this));
+        // assertRelApproxEq(targetBalPost - targetBalPre, 0.5e18, 0.0001e18 /* 0.01% */); // TODO: what should it be the expected value?
+
+        // Check that the Target dust leftover is small
+        assertLt(target.balanceOf(address(autoRoller)), 1e9);
+    }
+
+    function testMaxRedeemDuringCooldown(uint256 amount) public {
+        // 1. Make a deposit during cooldown.
+        uint256 sharesOut = autoRoller.deposit(0.1e18, address(this));
+
+        // 2. Assert max withdraw is same sharesOut.
+        assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
+
+        // 4. Roll into the first Series.
+        autoRoller.roll();
+
+        // 3. Make another deposit during cooldown.
+        sharesOut += autoRoller.deposit(0.1e18, address(this));
+
+        vm.warp(autoRoller.maturity());
+        
+        // 4. Increase scale and settle the first Series.
+        autoRoller.settle();
+
+        // 5. Assert max withdraw is same total shares.
+        assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
     }
 
     function testMaxRedeemWithPTsExcess(uint256 amount) public {
         // 1. Make a deposit durring cooldown.
-        autoRoller.deposit(1e18, address(this));
+        uint256 sharesOut = autoRoller.deposit(1e18, address(this));
 
         // 2. Roll into the first Series.
         autoRoller.roll();
@@ -1050,27 +1092,27 @@ contract AutoRollerTest is DSTestPlus {
         target.mint(address(this), 1e18);
         target.approve(address(divider), 1e18);
         divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
-
         ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
         Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
-
         pt.approve(address(balancerVault), 1e18);
+
+        // 4. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
+        // is less than the diff between YTs and PTs.
         _swap(
             BalancerVault.SingleSwap({
                 poolId: space.getPoolId(),
                 kind: BalancerVault.SwapKind.GIVEN_IN,
                 assetIn: address(pt),
                 assetOut: address(autoRoller.asset()),
-                amount: 0.001e18,
+                amount: 0.001e18, // TODO: how do I calculate a number such that it would make the maxPTSale < diff? This number works though
                 userData: hex""
             })
         );
 
-        // 4. Assert max redeem is same as deposit.
-        uint256 maxRedeem = autoRoller.maxRedeem(address(this));
-        assertEq(maxRedeem, 1e18);
+        // 5. Assert max redeem is same as sharesOut.
+        assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
 
-        // 5. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
+        // 6. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
         // is more than the diff between YTs and PTs.
         _swap(
             BalancerVault.SingleSwap({
@@ -1078,14 +1120,14 @@ contract AutoRollerTest is DSTestPlus {
                 kind: BalancerVault.SwapKind.GIVEN_IN,
                 assetIn: address(pt),
                 assetOut: address(autoRoller.asset()),
-                amount: 0.1e18, // TODO: how do I calculate a number such that it would make the maxPTSale >= diff? This number works though
+                amount: 0.01e18, // TODO: how do I calculate a number such that it would make the maxPTSale >= diff? This number works though
                 userData: hex""
             })
         );
 
-        // 6. Assert max redeem is TODO.
-        maxRedeem = autoRoller.maxRedeem(address(this));
-        // TODO: assertEq(maxRedeem, 123);
+        // 6. Assert max redeem is same as TODO.
+        sharesOut = autoRoller.maxRedeem(address(this));
+        // assertEq(sharesOut, TODO);
 
         // 7. TODO: add missing scenario: `if (ptReserves >= diff)`.
     }
@@ -1126,6 +1168,14 @@ contract AutoRollerTest is DSTestPlus {
         assertLt(excessBal, 1e16);
         assertEq(excessBal, pt.balanceOf(address(this)) - ptBalBefore);
     }
+
+    // function testRedeemPreviewReversion() public {
+
+    // }
+
+    // exxcess pts or yts
+    // redeem doesn't revert
+    // decimals
 
     function _swap(BalancerVault.SingleSwap memory request) internal {
         BalancerVault.FundManagement memory funds = BalancerVault.FundManagement({
