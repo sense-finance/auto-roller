@@ -72,9 +72,7 @@ contract RollerPeriphery {
     function withdrawUnderlying(AutoRoller roller, uint256 underlyingOut, address receiver, uint256 maxSharesOut) external returns (uint256 shares) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
-        uint256 scale = adapter.scale();
-
-        uint256 assetOut = underlyingOut.divWadDown(scale); // Tokens out, round down.
+        uint256 assetOut = underlyingOut.divWadDown(adapter.scale()); // Tokens out, round down.
 
         if ((shares = roller.withdraw(assetOut, address(this), msg.sender)) > maxSharesOut) {
             revert MaxSharesError();
@@ -102,9 +100,8 @@ contract RollerPeriphery {
 
     function mintFromUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn) external returns (uint256 assets) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
-        uint256 scale = adapter.scale();
 
-        uint256 underlyingIn = roller.previewMint(shares).mulWadUp(scale); // Tokens in, round up.
+        uint256 underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()); // Tokens in, round up.
 
         // approval
         ERC20(adapter.underlying()).safeTransferFrom(msg.sender, address(this), underlyingIn);
