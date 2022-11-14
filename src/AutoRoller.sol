@@ -76,7 +76,7 @@ contract AutoRoller is ERC4626 {
 
     DividerLike      internal immutable divider;
     BalancerVault    internal immutable balancerVault;
-    OwnedAdapterLike internal immutable adapter;
+    OwnedAdapterLike public   immutable adapter;
 
     uint256 internal immutable ifee; // Cached issuance fee.
     uint256 internal immutable minSwapAmount; // Min number of PTs that can be swapped out when exiting.
