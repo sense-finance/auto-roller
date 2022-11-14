@@ -133,8 +133,8 @@ contract AutoRollerTest is DSTestPlus {
         vm.stopPrank();
 
         // Mint Target
-        target.mint(address(this), 2e18);
-        target.approve(address(autoRoller), 2e18);
+        target.mint(address(this), 10e18);
+        target.approve(address(autoRoller), 10e18);
 
         // Mint Stake
         stake.mint(address(this), 1e18);
@@ -184,7 +184,7 @@ contract AutoRollerTest is DSTestPlus {
         vm.stopPrank();
 
         (, bytes32[] memory writes) = vm.accesses(address(autoRoller));
-        // Check that no storage slots were written to
+        // Check that the expected number of storage slots were written to
         assertEq(writes.length, 6);
     }
 
@@ -1007,14 +1007,6 @@ contract AutoRollerTest is DSTestPlus {
 
     // OTHER TESTS (LINES NOT COVERED ACCORDING CODECOV) TODO: re-order these tests?
 
-    function testAfterDepositWithOnlyTargetLiquidity() public {
-        // The idea is making a test that covers line case on the `afterDeposit` function
-        // where `if (assets - targetToJoin > 0)` is false.
-        // I think can never happen since `onSponsorWindowOpened`, when calling `_space.getEQReserves`
-        // we are doing `targetedRate < 0.01e18 ? 0.01e18 : targetedRate` which means that we are always
-        // getting a `eqPTReserves` > 0 so we will be issuing PTs. 
-    }
-
     function testPreviewWithdrawInsufficentLiquidity(uint256 amount) public {
         // 1. Roll into the first Series.
         autoRoller.roll();
@@ -1038,22 +1030,24 @@ contract AutoRollerTest is DSTestPlus {
 
     function testRedeemWithYTsExcess() public {
         // 1. Deposit during the initial cooldown phase.
-        autoRoller.deposit(0.2e18, address(this));
-        assertEq(autoRoller.balanceOf(address(this)), 0.2e18);
+        autoRoller.deposit(2e18, address(this));
+        assertEq(autoRoller.balanceOf(address(this)), 2e18);
 
-        // 3. Roll the Target into the first Series.
+        // 2. Roll the Target into the first Series.
         autoRoller.roll();
 
-        // 4. Deposit during the first active phase.
-        autoRoller.deposit(0.3e18, address(this));
-        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
+        // 3. Deposit during the first active phase.
+        autoRoller.deposit(3e18, address(this));
+        assertRelApproxEq(autoRoller.balanceOf(address(this)), 5e18, 0.0001e18 /* 0.01% */);
 
-        // 5. Redeem all shares while still in the active phase.
+        // 4. Redeem all shares while still in the active phase.
         uint256 targetBalPre = target.balanceOf(address(this));
         vm.expectCall(address(periphery), abi.encodeWithSelector(periphery.swapYTsForTarget.selector));
         autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
         uint256 targetBalPost = target.balanceOf(address(this));
-        // assertRelApproxEq(targetBalPost - targetBalPre, 0.5e18, 0.0001e18 /* 0.01% */); // TODO: what should it be the expected value?
+        uint256 scalingFactor = 10**(18 - autoRoller.decimals());
+        uint256 firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
+        // assertRelApproxEq(targetBalPost - targetBalPre, 5e18 - firstDeposit, 0.0001e18 /* 0.01% */); // TODO: what should it be the expected value?
 
         // Check that the Target dust leftover is small
         assertLt(target.balanceOf(address(autoRoller)), 1e9);
@@ -1066,15 +1060,13 @@ contract AutoRollerTest is DSTestPlus {
         // 2. Assert max withdraw is same sharesOut.
         assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
 
-        // 4. Roll into the first Series.
+        // 3. Roll into the first Series.
         autoRoller.roll();
 
-        // 3. Make another deposit during cooldown.
+        // 4. Make another deposit during cooldown.
         sharesOut += autoRoller.deposit(0.1e18, address(this));
 
         vm.warp(autoRoller.maturity());
-        
-        // 4. Increase scale and settle the first Series.
         autoRoller.settle();
 
         // 5. Assert max withdraw is same total shares.
@@ -1088,16 +1080,16 @@ contract AutoRollerTest is DSTestPlus {
         // 2. Roll into the first Series.
         autoRoller.roll();
 
-        // 3. Swap PTs in to generate excess of PTs.
+        // 3. Issue PTs.
         target.mint(address(this), 1e18);
         target.approve(address(divider), 1e18);
         divider.issue(address(mockAdapter), autoRoller.maturity(), 1e18);
         ERC20 pt = ERC20(divider.pt(address(mockAdapter), autoRoller.maturity()));
-        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
-        pt.approve(address(balancerVault), 1e18);
-
+        
         // 4. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
         // is less than the diff between YTs and PTs.
+        Space space = Space(spaceFactory.pools(address(mockAdapter), autoRoller.maturity()));
+        pt.approve(address(balancerVault), 1e18);
         _swap(
             BalancerVault.SingleSwap({
                 poolId: space.getPoolId(),
@@ -1112,7 +1104,7 @@ contract AutoRollerTest is DSTestPlus {
         // 5. Assert max redeem is same as sharesOut.
         assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
 
-        // 6. Swap PTs in to generate excess of PTs and that the number of PTs we can sell
+        // 6. Swap more PTs in to generate excess of PTs and that the number of PTs we can sell
         // is more than the diff between YTs and PTs.
         _swap(
             BalancerVault.SingleSwap({
@@ -1125,11 +1117,11 @@ contract AutoRollerTest is DSTestPlus {
             })
         );
 
-        // 6. Assert max redeem is same as TODO.
+        // 5. Assert max redeem is same as sharesOut.
         sharesOut = autoRoller.maxRedeem(address(this));
-        // assertEq(sharesOut, TODO);
+        assertEq(autoRoller.maxRedeem(address(this)), sharesOut);
 
-        // 7. TODO: add missing scenario: `if (ptReserves >= diff)`.
+        // 6. TODO: add missing scenario: `if (ptReserves >= diff)`.
     }
 
     function testEjectWithPTsExcess() public {

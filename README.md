@@ -22,7 +22,7 @@ Here are some important concepts to understand so you know how the auto-roller w
 * `AutoRollerFactory` - on-chain factory for easy deployment of new auto-roller instances.
 
 * `RollerPeriphery` - the slippage protected LP management interface to all AutoRollers.
-* `OwnableAdapter` - Sense adapter owned by a unique auto-roller. Through the auto-roller, series rollers can sponsor new series via `AutoRoller.roll` and settle series via `AutoRoller.settle`. This adapter must **override** `getMaturityBounds` so only the roller can sponsor preventing a potential DoS attack.
+* `OwnableAdapter` - Sense adapter owned by a unique auto-roller. Through the auto-roller, series rollers can sponsor new series via `AutoRoller.roll` and settle series via `AutoRoller.settle`. This adapter must **override** `getMaturityBounds` so only the roller can sponsor, preventing a potential DoS attack.
 
 ### Phases
 The auto-roller has an **active** and a **cooldown** phase. During the active phase, there is a specific Space pool that the auto-roller is managing, and the liquidity it holds is in the form of Space LP shares and YTs (e.g. sY-wstETH). In contrast, the cooldown phase is in-between active phases when the auto-roller has settled one series but not yet sponsored a new one and deposited liquidity into the new pool (also at the very beginning of the contract’s lifecycle before it has entered the first pool). 

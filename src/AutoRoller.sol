@@ -369,7 +369,7 @@ contract AutoRoller is ERC4626 {
 
             balances[1 - _pti] = targetToJoin;
 
-            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity. TODO: can this ever happen?
+            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity.
                 balances[_pti] = divider.issue(address(adapter), maturity, assets - targetToJoin);
             }
 
