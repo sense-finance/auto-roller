@@ -196,7 +196,7 @@ contract AutoRollerTest is Test {
         );
 
         target.approve(address(autoRoller), 2e18);
-        stake.approve(address(autoRoller), 0.2e18);
+        stake.safeApprove(address(autoRoller), 0.2e18);
 
         autoRoller.roll();
 
