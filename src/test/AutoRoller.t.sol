@@ -2,12 +2,12 @@
 pragma solidity 0.8.13;
 
 import { Vm } from "forge-std/Vm.sol";
+import { Test } from "forge-std/Test.sol";
 import { console } from "forge-std/console.sol";
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
-import { DSTestPlus } from "solmate/test/utils/DSTestPlus.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 
 import { BaseAdapter } from "sense-v1-core/adapters/abstract/BaseAdapter.sol";
@@ -34,11 +34,10 @@ interface ProtocolFeesController {
     function setSwapFeePercentage(uint256) external;
 }
 
-contract AutoRollerTest is DSTestPlus {
+contract AutoRollerTest is Test {
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int128;
 
-    Vm internal constant vm = Vm(HEVM_ADDRESS);
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant STAKE_SIZE = 0.1e18;
 
@@ -212,8 +211,8 @@ contract AutoRollerTest is DSTestPlus {
         maturity = autoRoller.maturity();
 
         // Check that less than 1e7 PTs & Target are leftover
-        assertApproxEq(ERC20(divider.pt(address(mockAdapter), maturity)).balanceOf(address(autoRoller)), 0, 1e12);
-        assertApproxEq(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
+        assertApproxEqAbs(ERC20(divider.pt(address(mockAdapter), maturity)).balanceOf(address(autoRoller)), 0, 1e12);
+        assertApproxEqAbs(autoRoller.asset().balanceOf(address(autoRoller)), 0, 1e12);
 
         Space space = Space(spaceFactory.pools(address(mockAdapter), maturity));
         ( , uint256[] memory balances, ) = balancerVault.getPoolTokens(space.getPoolId());
@@ -223,7 +222,7 @@ contract AutoRollerTest is DSTestPlus {
             .divWadDown(balances[1 - pti].mulWadDown(mockAdapter.scale())) - 1e18;
 
         // Check that the actual stretched implied rate in the pool is close the targeted rate.
-        assertRelApproxEq(stretchedImpliedRate, targetedRate, 0.0001e18 /* 0.01% */);
+        assertApproxEqRel(stretchedImpliedRate, targetedRate, 0.0001e18 /* 0.01% */);
     }
 
     function testRoll() public {
@@ -269,7 +268,7 @@ contract AutoRollerTest is DSTestPlus {
         ( , uint256 excessBal, bool isExcessPTs) = autoRoller.eject(autoRoller.balanceOf(address(this)), address(this), address(this));
 
         // Expect just a little YT excess.
-        assertBoolEq(isExcessPTs, false);
+        assertEq(isExcessPTs, false);
         assertLt(excessBal, 1e16);
         assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
     }
@@ -330,7 +329,7 @@ contract AutoRollerTest is DSTestPlus {
 
         // 5. Deposit during the first active phase.
         autoRoller.deposit(0.3e18, address(this));
-        assertRelApproxEq(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
+        assertApproxEqRel(autoRoller.balanceOf(address(this)), 0.5e18, 0.0001e18 /* 0.01% */);
 
         // 6. Withdraw while still in the active phase.
         uint256 targetBalPre = target.balanceOf(address(this));
@@ -427,7 +426,7 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.deposit(assets, alice);
 
         uint256 maxWithdraw = autoRoller.maxWithdraw(alice);
-        assertRelApproxEq(maxWithdraw, assets, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(maxWithdraw, assets, 0.001e18 /* 0.1% */);
     }
 
     function testFuzzTotalAssets(uint256 assets) public {
@@ -495,9 +494,9 @@ contract AutoRollerTest is DSTestPlus {
         uint256 aliceTargetAmount = autoRoller.mint(aliceShareAmount, alice);
 
         // Expect exchange rate to be close to 1:1 on initial mint.
-        assertRelApproxEq(aliceShareAmount, aliceTargetAmount, 0.0001e18 /* 0.01% */);
+        assertApproxEqRel(aliceShareAmount, aliceTargetAmount, 0.0001e18 /* 0.01% */);
         uint256 previewedSharesIn = autoRoller.previewWithdraw(aliceTargetAmount * 0.999e18 / 1e18);
-        assertRelApproxEq(previewedSharesIn, aliceShareAmount, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(previewedSharesIn, aliceShareAmount, 0.001e18 /* 0.1% */);
         if (previewedSharesIn != aliceShareAmount) {
             // Confirm rounding expectations.
             assertGt(previewedSharesIn, aliceShareAmount * 0.999e18 / 1e18);
@@ -507,18 +506,18 @@ contract AutoRollerTest is DSTestPlus {
         uint256 scalingFactor = 10**(18 - autoRoller.decimals());
         uint256 firstDeposit = (0.01e18 - 1) / scalingFactor + 1;
 
-        assertRelApproxEq(previewedSharesOut, aliceShareAmount, 0.000001e18 /* 0.0001% */);
-        assertRelApproxEq(autoRoller.totalSupply(), aliceShareAmount + firstDeposit, 0.001e18 /* 0.1% */);
-        assertRelApproxEq(autoRoller.totalAssets(), aliceTargetAmount + firstDeposit, 0.001e18 /* 0.1% */);
-        assertRelApproxEq(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
+        assertApproxEqRel(previewedSharesOut, aliceShareAmount, 0.000001e18 /* 0.0001% */);
+        assertApproxEqRel(autoRoller.totalSupply(), aliceShareAmount + firstDeposit, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.totalAssets(), aliceTargetAmount + firstDeposit, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.balanceOf(alice), aliceTargetAmount, 0.0001e18 /* 0.01% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
 
         vm.prank(alice);
         autoRoller.redeem(aliceShareAmount, alice, alice);
 
-        assertRelApproxEq(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.balanceOf(alice), 0);
-        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
 
     function testFuzzSingleMintRedeemActivePhasePTsIn(uint256 shareAmount) public {
@@ -568,13 +567,13 @@ contract AutoRollerTest is DSTestPlus {
 
         // Expect exchange rate to be close to 1:1 on initial mint.
         uint256 previewedSharesIn1 = autoRoller.previewWithdraw(aliceTargetAmount);
-        assertRelApproxEq(previewedSharesIn1, shareAmount, 0.005e18 /* 0.5% */);
+        assertApproxEqRel(previewedSharesIn1, shareAmount, 0.005e18 /* 0.5% */);
         if (previewedSharesIn1 != shareAmount) {
             // Confirm rounding expectations.
             assertGt(previewedSharesIn1, shareAmount);
         }
         uint256 previewedSharesOut = autoRoller.previewDeposit(aliceTargetAmount);
-        assertRelApproxEq(previewedSharesOut, shareAmount, 0.000001e18 /* 0.0001% */);
+        assertApproxEqRel(previewedSharesOut, shareAmount, 0.000001e18 /* 0.0001% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - aliceTargetAmount);
 
         target.mint(address(this), shareAmount * 2);
@@ -589,7 +588,7 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.redeem(shareAmount, alice, alice);
 
         assertEq(autoRoller.balanceOf(alice), 0);
-        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.005e18 /* 0.5% */);
+        assertApproxEqRel(target.balanceOf(alice), alicePreDepositBal, 0.005e18 /* 0.5% */);
 
         // Bob can withdraw.
         vm.prank(bob);
@@ -616,12 +615,12 @@ contract AutoRollerTest is DSTestPlus {
         uint256 aliceShareAmount = autoRoller.deposit(amount, alice);
 
         // Expect exchange rate to be 1:1 on initial deposit.
-        assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.001e18 /* 0.1% */);
-        assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.previewDeposit(amount), aliceShareAmount, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.totalSupply(), aliceShareAmount + firstDeposit);
-        assertRelApproxEq(autoRoller.totalAssets(), amount + firstDeposit, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.totalAssets(), amount + firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
-        assertRelApproxEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), amount, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), amount, 0.001e18 /* 0.1% */);
         assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
 
         vm.startPrank(alice);
@@ -629,9 +628,9 @@ contract AutoRollerTest is DSTestPlus {
         autoRoller.redeem(autoRoller.balanceOf(alice), alice, alice);
         vm.stopPrank();
 
-        assertRelApproxEq(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(autoRoller.totalAssets(), firstDeposit, 0.001e18 /* 0.1% */);
         assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
-        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
 
     function testFuzzSingleDepositWithdrawPTsIn(uint256 amount) public {
@@ -683,8 +682,8 @@ contract AutoRollerTest is DSTestPlus {
         uint256 aliceShareAmount = autoRoller.deposit(amount, alice);
 
         // Expect exchange rate to be 1:1 on initial deposit.
-        assertRelApproxEq(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.005e18 /* 0.5% */);
-        assertRelApproxEq(autoRoller.previewDeposit(amount), aliceShareAmount, 0.005e18 /* 0.5% */);
+        assertApproxEqRel(autoRoller.previewWithdraw(amount * 0.999e18 / 1e18), aliceShareAmount, 0.005e18 /* 0.5% */);
+        assertApproxEqRel(autoRoller.previewDeposit(amount), aliceShareAmount, 0.005e18 /* 0.5% */);
         assertEq(autoRoller.totalSupply(), aliceShareAmount + bobShareAmount + firstDeposit);
         assertEq(autoRoller.balanceOf(alice), aliceShareAmount);
         assertEq(target.balanceOf(alice), alicePreDepositBal - amount);
@@ -695,7 +694,7 @@ contract AutoRollerTest is DSTestPlus {
         vm.stopPrank();
 
         assertEq(autoRoller.convertToAssets(autoRoller.balanceOf(alice)), 0);
-        assertRelApproxEq(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
+        assertApproxEqRel(target.balanceOf(alice), alicePreDepositBal, 0.001e18 /* 0.1% */);
     }
 
     // FPS Audit SC.1 test

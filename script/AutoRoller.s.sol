@@ -94,7 +94,6 @@ contract TestnetDeploymentScript is Script {
 
         console2.log("Auto Roller ", address(autoRoller));
 
-        mockAdapter.setIsTrusted(address(autoRoller), true);
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
 
