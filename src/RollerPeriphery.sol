@@ -5,10 +5,12 @@ import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
+import { Trust } from "sense-v1-utils/Trust.sol";
+
 import { AutoRoller } from "./AutoRoller.sol";
 
 // Inspired by https://github.com/fei-protocol/ERC4626/blob/main/src/ERC4626Router.sol
-contract RollerPeriphery {
+contract RollerPeriphery is Trust {
     using SafeTransferLib for ERC20;
 
     /// @notice thrown when amount of assets received is below the min set by caller.
@@ -25,6 +27,8 @@ contract RollerPeriphery {
 
     /// @notice thrown when amount of assets or excess received is below the max set by caller.
     error MinAssetsOrExcessError();
+
+    constructor() Trust(msg.sender) {}
 
     /// @notice Redeem vault shares with slippage protection 
     /// @param vault ERC4626 vault
@@ -97,7 +101,7 @@ contract RollerPeriphery {
         }
     }
 
-    function approve(ERC20 token, address to) public payable {
+    function approve(ERC20 token, address to) public payable requiresTrust {
         token.safeApprove(to, type(uint256).max);
     }
 }

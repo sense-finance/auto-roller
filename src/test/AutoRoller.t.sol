@@ -117,6 +117,7 @@ contract AutoRollerTest is Test {
         );
 
         mockAdapter.setIsTrusted(address(arFactory), true);
+        rollerPeriphery.setIsTrusted(address(arFactory), true);
 
         autoRoller = arFactory.create(
             OwnedAdapterLike(address(mockAdapter)),
