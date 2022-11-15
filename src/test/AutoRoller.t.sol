@@ -304,11 +304,6 @@ contract AutoRollerTest is Test {
 
         uint256 targetBalPost2 = target.balanceOf(address(this));
 
-        console.log("bal pre", targetBalPre);
-        console.log("bal targetBalPost1", targetBalPost1);
-        console.log("bal targetBalPost2", targetBalPost2);
-        console.log("share bal", autoRoller.balanceOf(address(this)));
-
         assertApproxEqAbs(targetBalPost2 - targetBalPost1, targetBalPost1 - targetBalPre, 5);
     }
 
