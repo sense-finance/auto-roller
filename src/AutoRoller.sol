@@ -4,6 +4,7 @@ pragma solidity 0.8.13;
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
+import { ReentrancyGuard } from "solmate/utils/ReentrancyGuard.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 
 import { DateTime } from "./external/DateTime.sol";
@@ -53,7 +54,7 @@ interface OwnedAdapterLike {
     function setIsTrusted(address,bool) external;
 }
 
-contract AutoRoller is ERC4626 {
+contract AutoRoller is ERC4626, ReentrancyGuard {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using SafeCast for *;
@@ -707,7 +708,7 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Transfer any token not included in the set {asset,yt,pt,space} to the rewards recipient.
     /// @param coin address of the coin to transfer out.
-    function claimRewards(ERC20 coin) external {
+    function claimRewards(ERC20 coin) external nonReentrant {
         require(coin != asset);
         if (maturity != MATURITY_NOT_SET) {
             require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
