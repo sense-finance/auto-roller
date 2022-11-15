@@ -671,9 +671,7 @@ contract AutoRoller is ERC4626 {
     /// @return isExcessPTs Whether the excess token is a YT or PT.
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
         uint256 collected = yt.collect();
-        if (collected > 0) {
-            densifyShares(collected);
-        }
+        if (collected > 0) { _densifyShares(collected); }
 
         uint256 supply = totalSupply; // Save extra SLOAD.
 
