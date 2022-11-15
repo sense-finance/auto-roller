@@ -9,7 +9,7 @@ import { AutoRoller, DividerLike, OwnedAdapterLike, RollerUtils, PeripheryLike }
 import { BaseSplitCodeFactory } from "./BaseSplitCodeFactory.sol";
 
 interface RollerPeripheryLike {
-    function approve(ERC20,address,uint256) external;
+    function approve(ERC20,address) external;
 }
 
 contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
