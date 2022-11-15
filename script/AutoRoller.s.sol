@@ -49,7 +49,7 @@ contract TestnetDeploymentScript is Script {
         Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
         Divider divider = Divider(spaceFactory.divider());
 
-        RollerUtils utils = new RollerUtils();
+        RollerUtils utils = new RollerUtils(address(divider));
 
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
 

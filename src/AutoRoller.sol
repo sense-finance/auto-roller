@@ -856,7 +856,9 @@ contract RollerUtils {
     uint256 internal constant SECONDS_PER_YEAR = 31536000;
     uint256 internal constant ONE = 1e18;
 
-    address internal constant DIVIDER = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
+    address internal immutable divider;
+
+    constructor(address _divider) { divider = _divider; }
 
     /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
     /// @param monthsForward Number of months in to advance forward.
@@ -888,7 +890,7 @@ contract RollerUtils {
     /// @param space Maturity associated with the Series who's Space data this function is fetching.
     /// @return stretchedRate Rate implied by the previous Series stretched to the Space pool's timestretch period.
     function getNewTargetedRate(uint256 /* fallbackTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
-        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
+        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(divider).series(adapter, prevMaturity);
 
         require(mscale != 0);
 
