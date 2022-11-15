@@ -275,6 +275,43 @@ contract AutoRollerTest is Test {
         assertEq(excessBal, ERC20(divider.yt(address(mockAdapter), autoRoller.maturity())).balanceOf(address(this)));
     }
 
+    function testFuzzEjectYieldCollection(uint256 scaleDst, uint256 deposit) public {
+        mockAdapter.setScale(1.1e18);
+
+        scaleDst = bound(scaleDst, 1.1e18, 1000000e18);
+        deposit = bound(deposit, 1e18, 1000000e18);
+
+        // 1. Deposit during the initial cooldown phase.
+        target.mint(address(this), deposit);
+        target.approve(address(autoRoller), deposit + 1e18);
+        autoRoller.deposit(deposit, address(this));
+
+        // 2. Roll into the first Series.
+        autoRoller.roll();
+
+        // Double the scale so that yield accrued will be exactly half of the escrowed asset.
+        mockAdapter.setScale(scaleDst);
+
+        uint256 targetBalPre = target.balanceOf(address(this));
+
+        uint256 shareBal = autoRoller.balanceOf(address(this));
+
+        autoRoller.eject(shareBal / 2, address(this), address(this));
+
+        uint256 targetBalPost1 = target.balanceOf(address(this));
+
+        autoRoller.eject(shareBal / 2, address(this), address(this));
+
+        uint256 targetBalPost2 = target.balanceOf(address(this));
+
+        console.log("bal pre", targetBalPre);
+        console.log("bal targetBalPost1", targetBalPost1);
+        console.log("bal targetBalPost2", targetBalPost2);
+        console.log("share bal", autoRoller.balanceOf(address(this)));
+
+        assertApproxEqAbs(targetBalPost2 - targetBalPost1, targetBalPost1 - targetBalPre, 5);
+    }
+
     function testCooldown() public {
         uint256 cooldown = 10 days;
         autoRoller.setParam("COOLDOWN", cooldown);

@@ -31,7 +31,7 @@ interface DividerLike {
 interface YTLike {
     function approve(address, uint256) external;
     function transfer(address, uint256) external;
-    function collect() external;
+    function collect() external returns (uint256);
     function balanceOf(address) external view returns (uint256);
 }
 
@@ -670,6 +670,11 @@ contract AutoRoller is ERC4626 {
     /// @return excessBal Amount of excess PT or YT redeemable by the given number of shares.
     /// @return isExcessPTs Whether the excess token is a YT or PT.
     function _exitAndCombine(uint256 shares) internal returns (uint256, bool) {
+        uint256 collected = yt.collect();
+        if (collected > 0) {
+            densifyShares(collected);
+        }
+
         uint256 supply = totalSupply; // Save extra SLOAD.
 
         uint256 lpBal      = shares.mulDivDown(space.balanceOf(address(this)), supply);
@@ -690,8 +695,8 @@ contract AutoRoller is ERC4626 {
             })
         );
 
-        uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
         ptShare += pt.balanceOf(address(this)) - totalPTBal;
+        uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
 
         unchecked {
             // Safety: an inequality check is done before subtraction.
@@ -703,6 +708,30 @@ contract AutoRoller is ERC4626 {
                 return (ytBal - ptShare, false);
             }
         }
+    }
+
+    function _densifyShares(uint256 assets) internal {
+        uint256 _pti    = pti;
+        bytes32 _poolId = poolId;
+        (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+        (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(_poolId);
+
+        uint256 targetForIssuance = _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored());
+
+        balances[1 - _pti] = assets - targetForIssuance;
+        if (assets - targetForIssuance > 0) {
+            balances[_pti] = divider.issue(address(adapter), maturity, targetForIssuance);
+        }
+
+        _joinPool(
+            _poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0),
+                fromInternalBalance: false
+            })
+        );
     }
 
     /// @notice Transfer any token not included in the set {asset,yt,pt,space} to the rewards recipient.
