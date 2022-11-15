@@ -13,7 +13,7 @@ interface RollerPeripheryLike {
 }
 
 contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
-    error RollerQuantityLimit();
+    error RollerQuantityLimitExceeded();
 
     DividerLike internal immutable divider;
     address     internal immutable balancerVault;
@@ -49,7 +49,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
 
         uint256 id = rollers[address(adapter)].length;
 
-        if (id > 1 && !isTrusted[msg.sender]) revert RollerQuantityLimit();
+        if (id > 0 && !isTrusted[msg.sender]) revert RollerQuantityLimitExceeded();
 
         bytes memory constructorArgs = abi.encode(
             ERC20(target),

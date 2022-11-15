@@ -61,6 +61,8 @@ contract AutoRollerTest is Test {
     ERC20 pt;
     ERC20 yt;
 
+    BaseAdapter.AdapterParams mockAdapterParams;
+
     RollerPeriphery rollerPeriphery;
     AutoRollerFactory arFactory;
     AutoRoller autoRoller;
@@ -85,7 +87,7 @@ contract AutoRollerTest is Test {
 
         stake = new MockERC20("Stake", "ST", 18);
 
-        BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
+        mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
             stake: address(stake),
             stakeSize: STAKE_SIZE,
@@ -942,6 +944,48 @@ contract AutoRollerTest is Test {
         mockAdapter.setScale(0.9e18);
         uint256 targetedRate = utils.getNewTargetedRate(0, address(mockAdapter), maturity, space);
         assertEq(targetedRate, 0);
+    }
+
+    function testFactoryRollerQuantityLimit() public {
+        // 1. Untrusted addresses can't create more than one roller on the same adapter.
+        vm.startPrank(address(0xfede));
+        vm.expectRevert(abi.encodeWithSelector(AutoRollerFactory.RollerQuantityLimitExceeded.selector));
+        autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION
+        );
+        // ... even if the rewards recipient is different (changing the salt).
+        vm.expectRevert(abi.encodeWithSelector(AutoRollerFactory.RollerQuantityLimitExceeded.selector));
+        autoRoller = arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            address(0x13372),
+            TARGET_DURATION
+        );
+
+        // ... but they can still create rollers on new adapters.
+        MockOwnableAdapter mockAdapter2 = new MockOwnableAdapter(
+            address(divider),
+            address(target),
+            address(underlying),
+            mockAdapterParams
+        );
+        mockAdapter2.setIsTrusted(address(arFactory), true);
+        arFactory.create(OwnedAdapterLike(address(mockAdapter2)), REWARDS_RECIPIENT, TARGET_DURATION);
+        vm.stopPrank();
+
+        // 2. The testing contract address, however, can create as many rollers as it wants since it's trusted.
+        assertEq(arFactory.isTrusted(address(this)), true);
+        arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION
+        );
+        arFactory.create(
+            OwnedAdapterLike(address(mockAdapter)),
+            REWARDS_RECIPIENT,
+            TARGET_DURATION
+        );
     }
 
     // function testRedeemPreviewReversion() public {
