@@ -42,9 +42,13 @@ contract MockOwnableAdapter is OwnableAdapter, Trust {
         uint256 uDecimals = underlying.decimals();
 
         underlying.transferFrom(msg.sender, address(this), uBal);
-        amountOut = uDecimals < tDecimals ? 
-            uBal * 1e18 / scale * (tDecimals - uDecimals) ** 10 :
-            uBal * 1e18 / scale / (uDecimals - tDecimals) ** 10;
+        if (tDecimals == uDecimals) {
+            amountOut = uBal * 1e18 / scale;
+        } else {
+            amountOut = uDecimals < tDecimals ?
+                uBal * 1e18 / scale * (tDecimals - uDecimals) ** 10 :
+                uBal * 1e18 / scale / (uDecimals - tDecimals) ** 10;
+        }
 
         target.mint(msg.sender, amountOut);
     }
@@ -57,9 +61,13 @@ contract MockOwnableAdapter is OwnableAdapter, Trust {
         uint256 uDecimals = underlying.decimals();
 
         target.transferFrom(msg.sender, address(this), tBal);
-        amountOut = uDecimals < tDecimals ? 
-            tBal * scale / 1e18 / (tDecimals - uDecimals) ** 10 :
-            tBal * scale / 1e18 * (uDecimals - tDecimals) ** 10;
+        if (tDecimals == uDecimals) {
+            amountOut = tBal * scale / 1e18;
+        } else {
+            amountOut = uDecimals < tDecimals ?
+                tBal * scale / 1e18 / (tDecimals - uDecimals) ** 10 :
+                tBal * scale / 1e18 * (uDecimals - tDecimals) ** 10;
+        }
             
         underlying.mint(msg.sender, amountOut);
     }

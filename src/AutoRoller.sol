@@ -45,6 +45,7 @@ interface PeripheryLike {
 
 interface OwnedAdapterLike {
     function target() external view returns (address);
+    function underlying() external view returns (address);
     function ifee() external view returns (uint256);
     function openSponsorWindow() external;
     function scale() external returns (uint256);

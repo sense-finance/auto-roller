@@ -794,6 +794,52 @@ contract AutoRollerTest is DSTestPlus {
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
+    function testRollerPeripheryDepositRedeemUnderlying() public {
+        autoRoller.roll();
+
+        underlying.mint(address(this), 1.1e18);
+        underlying.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
+
+        uint256 previewedShares = autoRoller.previewDeposit(targetValue);
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
+        rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares + 1);
+
+        uint256 receivedShares = rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, receivedShares);
+        assertEq(receivedShares, shareBalPost - shareBalPre);
+
+        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+
+        uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
+        uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinUnderlyingError.selector));
+        rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying + 1);
+
+        uint256 receivedUnderlying = rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying);
+
+        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+
+        assertEq(previewedUnderlying, receivedUnderlying);
+        assertEq(receivedUnderlying, underlyingBalPost - underlyingBalPre);
+
+        // No asset or share or underlying left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+        assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
+    }
+
     function testRollerPeripheryMintWithdraw() public {
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
         rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
@@ -826,7 +872,7 @@ contract AutoRollerTest is DSTestPlus {
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
         rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares - 1);
 
-        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedAssets);
+        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares);
 
         uint256 shareBalPost = autoRoller.balanceOf(address(this));
 
@@ -836,6 +882,54 @@ contract AutoRollerTest is DSTestPlus {
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+    }
+
+    function testRollerPeripheryMintWithdrawUnderlying() public {
+        autoRoller.roll();
+
+        underlying.mint(address(this), 1.1e18);
+        underlying.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
+
+        uint256 previewedAssets = autoRoller.previewMint(0.9e18);
+        uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
+
+        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxUnderlyingError.selector));
+        uint256 valIn = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying - 1);
+
+        uint256 pulledUnderlying = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying);
+        uint256 pulledAssets = pulledUnderlying.divWadDown(mockAdapter.scale());
+
+        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+
+        assertApproxEq(previewedUnderlying, pulledUnderlying, 1);
+        assertApproxEq(pulledUnderlying, underlyingBalPre - underlyingBalPost, 1);
+
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPre);
+
+        uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
+        rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, address(this), previewedShares - 1);
+
+        uint256 pulledShares = rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, address(this), previewedShares);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, pulledShares);
+        assertEq(pulledShares, shareBalPre - shareBalPost);
+
+        // No asset or share left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+        assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
     }
 
     function testRollerPeripheryEject() public {

@@ -23,11 +23,17 @@ contract RollerPeriphery {
     /// @notice thrown when amount of assets received is below the min set by caller.
     error MinAssetError();
 
+    /// @notice thrown when amount of underlying received is below the min set by caller.
+    error MinUnderlyingError();
+
     /// @notice thrown when amount of shares received is below the min set by caller.
     error MinSharesError();
 
     /// @notice thrown when amount of assets received is above the max set by caller.
     error MaxAssetError();
+
+    /// @notice thrown when amount of underlying received is above the max set by caller.
+    error MaxUnderlyingError();
 
     /// @notice thrown when amount of shares received is above the max set by caller.
     error MaxSharesError();
@@ -47,14 +53,14 @@ contract RollerPeriphery {
         }
     }
 
-    function redeemForUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut) external returns (uint256 assets) {
+    function redeemForUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut) external returns (uint256 underlyingOut) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
-        if ((assets = roller.redeem(shares, address(this), msg.sender)) < minAmountOut) {
-            revert MinAssetError();
+        if ((underlyingOut = adapter.unwrapTarget(roller.redeem(shares, address(this), msg.sender))) < minAmountOut) {
+            revert MinUnderlyingError();
         }
 
-        ERC20(adapter.underlying()).safeTransfer(msg.sender, adapter.unwrapTarget(assets));
+        ERC20(adapter.underlying()).safeTransfer(receiver, underlyingOut);
     }
 
     /// @notice Withdraw underlying asset from vault with slippage protection 
@@ -79,7 +85,7 @@ contract RollerPeriphery {
         }
 
         ERC20(adapter.underlying()).safeTransfer(
-            msg.sender,
+            receiver,
             adapter.unwrapTarget(roller.asset().balanceOf(address(this)))
         );
     }
@@ -98,16 +104,19 @@ contract RollerPeriphery {
         }
     }
 
-    function mintFromUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn) external returns (uint256 assets) {
+    function mintFromUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn) external returns (uint256 underlyingIn) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
-        uint256 underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()); // Tokens in, round up.
+        ERC20(adapter.underlying()).safeTransferFrom(
+            msg.sender,
+            address(this),
+            underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()) // Tokens in, round up.
+        );
+        adapter.wrapUnderlying(underlyingIn);
 
-        // approval
-        ERC20(adapter.underlying()).safeTransferFrom(msg.sender, address(this), underlyingIn);
-
-        if ((shares = roller.deposit(adapter.wrapUnderlying(underlyingIn), receiver)) > maxAmountIn) {
-            revert MinSharesError();
+        uint256 targetIn = roller.mint(shares, receiver);
+        if ((underlyingIn = targetIn.mulWadDown(adapter.scale())) > maxAmountIn) {
+            revert MaxUnderlyingError();
         }
     }
 
@@ -127,7 +136,7 @@ contract RollerPeriphery {
 
     function depositUnderlying(AutoRoller roller, uint256 underlyingIn, address receiver, uint256 minSharesOut) external returns (uint256 shares) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
-        // approval
+
         ERC20(adapter.underlying()).safeTransferFrom(msg.sender, address(this), underlyingIn);
 
         if ((shares = roller.deposit(adapter.wrapUnderlying(underlyingIn), receiver)) < minSharesOut) {
