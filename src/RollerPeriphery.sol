@@ -97,7 +97,7 @@ contract RollerPeriphery {
         }
     }
 
-    function approve(ERC20 token, address to, uint256 amount) public payable {
-        token.safeApprove(to, amount);
+    function approve(ERC20 token, address to) public payable {
+        token.safeApprove(to, type(uint256).max);
     }
 }

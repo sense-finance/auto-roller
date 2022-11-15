@@ -751,7 +751,7 @@ contract AutoRollerTest is Test {
 
     function testRollerPeripheryDepositRedeem() public {
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
-        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
 
         autoRoller.roll();
 
@@ -795,7 +795,7 @@ contract AutoRollerTest is Test {
 
     function testRollerPeripheryMintWithdraw() public {
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
-        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
 
         autoRoller.roll();
 
@@ -839,7 +839,7 @@ contract AutoRollerTest is Test {
 
     function testRollerPeripheryEject() public {
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
-        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller), type(uint256).max);
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
 
         autoRoller.roll();
 
