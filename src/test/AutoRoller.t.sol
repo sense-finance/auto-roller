@@ -9,6 +9,7 @@ import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
+import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 
 import { BaseAdapter } from "sense-v1-core/adapters/abstract/BaseAdapter.sol";
 import { Divider, TokenHandler } from "sense-v1-core/Divider.sol";
@@ -37,6 +38,7 @@ interface ProtocolFeesController {
 contract AutoRollerTest is Test {
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int128;
+    using SafeTransferLib for ERC20;
 
     uint256 public constant SECONDS_PER_YEAR = 31536000;
     uint256 public constant STAKE_SIZE = 0.1e18;
@@ -50,7 +52,7 @@ contract AutoRollerTest is Test {
 
     MockERC20 target;
     MockERC20 underlying;
-    MockERC20 stake;
+    ERC20 stake;
     MockOwnableAdapter mockAdapter;
     RollerUtils utils;
 
@@ -83,7 +85,7 @@ contract AutoRollerTest is Test {
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
 
-        stake = new MockERC20("Stake", "ST", 18);
+        stake = ERC20(AddressBook.USDT);
 
         BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
@@ -136,8 +138,9 @@ contract AutoRollerTest is Test {
         target.approve(address(autoRoller), 2e18);
 
         // Mint Stake
-        stake.mint(address(this), 1e18);
-        stake.approve(address(autoRoller), 1e18);
+        deal(address(stake), address(this), 1e18);
+        stake.allowance(address(this), address(autoRoller));
+        stake.safeApprove(address(autoRoller), 1e18);
 
         // Set protocol fees
         vm.startPrank(AddressBook.SENSE_DEPLOYER);
