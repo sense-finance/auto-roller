@@ -126,6 +126,7 @@ contract AutoRollerTest is Test {
 
         // Start multisig (admin) prank calls   
         vm.startPrank(AddressBook.SENSE_MULTISIG);
+        divider.setPeriphery(address(periphery));
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
 
