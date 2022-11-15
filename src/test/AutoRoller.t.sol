@@ -73,7 +73,7 @@ contract AutoRollerTest is Test {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
-        periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         divider = Divider(spaceFactory.divider());
 
         vm.label(address(spaceFactory), "SpaceFactory");
@@ -125,12 +125,13 @@ contract AutoRollerTest is Test {
         );
 
         // Start multisig (admin) prank calls   
-        vm.startPrank(AddressBook.SENSE_MULTISIG);
-        divider.setPeriphery(address(periphery));
+        vm.prank(AddressBook.SENSE_DEPLOYER);
         periphery.onboardAdapter(address(mockAdapter), true);
+
+        vm.prank(AddressBook.SENSE_MULTISIG);
         divider.setGuard(address(mockAdapter), type(uint256).max);
 
-        vm.stopPrank();
+        // vm.stopPrank();
 
         // Mint Target
         target.mint(address(this), 2e18);
@@ -740,7 +741,7 @@ contract AutoRollerTest is Test {
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));
         autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         yt.approve(address(periphery), type(uint256).max);
         periphery.swapYTsForTarget(address(mockAdapter), autoRoller.maturity(), ytBal);
         aafter = target.balanceOf(address(this));
