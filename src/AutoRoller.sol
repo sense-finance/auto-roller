@@ -429,7 +429,8 @@ contract AutoRoller is ERC4626 {
                 .mulDivDown(_space.adjustedTotalSupply(), targetReserves);
 
             // Shares represent proportional ownership of LP shares the vault holds.
-            return previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)));
+            shares = previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)));
+            require(shares > 100); // Avoid truncation imprecisions.
         }
     }
 
