@@ -46,7 +46,7 @@ contract TestnetDeploymentScript is Script {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         Divider divider = Divider(spaceFactory.divider());
 
         RollerUtils utils = new RollerUtils();

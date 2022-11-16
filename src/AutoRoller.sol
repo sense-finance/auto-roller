@@ -99,8 +99,8 @@ contract AutoRoller is ERC4626 {
     address internal lastRoller; // Last address to call roll.
 
     // Separate slots to meet contract size limits.
+    uint256 public   maturity = MATURITY_NOT_SET;
     uint256 internal initScale;
-    uint256 public  maturity = MATURITY_NOT_SET;
     uint256 internal pti;
 
     uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
