@@ -103,7 +103,7 @@ contract AutoRollerTest is Test {
             mockAdapterParams
         );
 
-        utils = new RollerUtils();
+        utils = new RollerUtils(address(divider));
 
         rollerPeriphery = new RollerPeriphery();
 
