@@ -656,7 +656,7 @@ contract AutoRoller is ERC4626 {
             yt.transfer(receiver, excessBal);
         }
 
-        asset.transfer(receiver, assets = asset.balanceOf(address(this)));
+        asset.safeTransfer(receiver, assets = asset.balanceOf(address(this)));
         emit Ejected(msg.sender, receiver, owner, assets, shares,
             isExcessPTs ? excessBal : 0,
             isExcessPTs ? 0 : excessBal
@@ -712,7 +712,7 @@ contract AutoRoller is ERC4626 {
         if (maturity != MATURITY_NOT_SET) {
             require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
         }
-        coin.transfer(rewardRecipient, coin.balanceOf(address(this)));
+        coin.safeTransfer(rewardRecipient, coin.balanceOf(address(this)));
     }
 
     /* ========== BALANCER UTILS ========== */
