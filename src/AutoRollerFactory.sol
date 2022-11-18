@@ -9,7 +9,7 @@ import { AutoRoller, DividerLike, OwnedAdapterLike, RollerUtils, PeripheryLike }
 import { BaseSplitCodeFactory } from "./BaseSplitCodeFactory.sol";
 
 interface RollerPeripheryLike {
-    function approve(ERC20,address,uint256) external;
+    function approve(ERC20,address) external;
 }
 
 contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
@@ -72,7 +72,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         autoRoller.setParam("OWNER", msg.sender);
 
         // Allow the new roller to move the roller periphery's target
-        rollerPeriphery.approve(ERC20(target), address(autoRoller), type(uint256).max);
+        rollerPeriphery.approve(ERC20(target), address(autoRoller));
 
         rollers[address(adapter)].push(autoRoller);
 
