@@ -324,6 +324,31 @@ contract AutoRoller is ERC4626 {
     /* ========== 4626 SPEC ========== */
     // see: https://eips.ethereum.org/EIPS/eip-4626
 
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+            uint256 assetBal = asset.balanceOf(address(this));
+            if (assetBal >= firstDeposit) {
+                _densifyShares(assetBal);
+            }
+        }
+
+        return super.deposit(assets, receiver);
+    }
+
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+            uint256 assetBal = asset.balanceOf(address(this));
+            if (assetBal >= firstDeposit) {
+                _densifyShares(assetBal);
+            }
+        }
+
+        return super.mint(shares, receiver);
+    }
+
+
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
@@ -669,6 +694,30 @@ contract AutoRoller is ERC4626 {
     }
 
     /* ========== GENERAL UTILS ========== */
+
+    function _densifyShares(uint256 assets) internal {
+        uint256 _pti    = pti;
+        bytes32 _poolId = poolId;
+        (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+        (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(_poolId);
+
+        uint256 targetForIssuance = _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored());
+
+        balances[1 - _pti] = assets - targetForIssuance;
+        if (assets - targetForIssuance > 0) {
+            balances[_pti] = divider.issue(address(adapter), maturity, targetForIssuance);
+        }
+
+        _joinPool(
+            _poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0),
+                fromInternalBalance: false
+            })
+        );
+    }
 
     /// @dev Exit Assets from the Space pool and combine the PTs with YTs we have reserved for the given number of shares.
     /// @param shares number of shares to exit and combine with.
