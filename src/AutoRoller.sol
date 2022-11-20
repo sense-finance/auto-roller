@@ -417,7 +417,7 @@ contract AutoRoller is ERC4626 {
     /// @notice The same as convertToShares, except that slippage is considered.
     /// @dev Preview the number of new LP shares that would be minted by joining with the given amount of Target, then use that
     ///      as a percentage of the total number of LP shares held in this contract to preview the number of new roller shares.
-    function previewDeposit(uint256 assets) public view override returns (uint256) {
+    function previewDeposit(uint256 assets) public view override returns (uint256 shares) {
         if (maturity == MATURITY_NOT_SET) {
             return super.previewDeposit(assets);
         } else {
@@ -430,7 +430,7 @@ contract AutoRoller is ERC4626 {
 
             // Shares represent proportional ownership of LP shares the vault holds.
             shares = previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)));
-            require(shares > 100); // Avoid truncation imprecisions.
+            require(shares > 100); // Avoid truncation imprecision.
         }
     }
 
