@@ -32,7 +32,7 @@ interface DividerLike {
 interface YTLike {
     function approve(address, uint256) external;
     function transfer(address, uint256) external;
-    function collect() external;
+    function collect() external returns (uint256);
     function balanceOf(address) external view returns (uint256);
 }
 
@@ -326,9 +326,37 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     /* ========== 4626 SPEC ========== */
     // see: https://eips.ethereum.org/EIPS/eip-4626
 
+    /// @dev Collect asset from roller's YT balance & densify shares before depositing
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+            uint256 assetBal = asset.balanceOf(address(this));
+            if (assetBal >= firstDeposit) {
+                _densifyShares(assetBal);
+            }
+        }
+
+        return super.deposit(assets, receiver);
+    }
+
+    /// @dev Collect asset from roller's YT balance & densify shares before minting
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+            uint256 assetBal = asset.balanceOf(address(this));
+            if (assetBal >= firstDeposit) {
+                _densifyShares(assetBal);
+            }
+        }
+
+        return super.mint(shares, receiver);
+    }
+
+
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
+             yt.collect();
             (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(shares);
 
             if (excessBal < minSwapAmount) return;
@@ -386,11 +414,11 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     function totalAssets() public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return asset.balanceOf(address(this));
-        } 
+        }
         else {
             Space _space = space;
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-            
+
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, true);
 
             uint256 ptSpotPrice = _space.getPriceFromImpliedRate(
@@ -494,7 +522,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
                     uint256 ytsToSell = ytBal - ptBal;
 
                     // Target from combining YTs with PTs - target needed to buy PTs.
-                    uint256 targetOut = ytsToSell > minSwapAmount ? 
+                    uint256 targetOut = ytsToSell > minSwapAmount ?
                         ytsToSell.divWadDown(scale) - space.onSwapPreview(
                             false,
                             false,
@@ -633,6 +661,10 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             if (allowed != type(uint256).max) allowance[owner][msg.sender] = allowed - shares;
         }
 
+        yt.collect();
+
+        uint256 assetBalPre = asset.balanceOf(address(this));
+        assets = shares.mulDivDown(assetBalPre, totalSupply);
         (excessBal, isExcessPTs) = _exitAndCombine(shares);
 
         _burn(owner, shares); // Burn after percent ownership is determined in _exitAndCombine.
@@ -643,7 +675,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             yt.transfer(receiver, excessBal);
         }
 
-        asset.safeTransfer(receiver, assets = asset.balanceOf(address(this)));
+        asset.transfer(receiver, assets = assets + asset.balanceOf(address(this)) - assetBalPre);
         emit Ejected(msg.sender, receiver, owner, assets, shares,
             isExcessPTs ? excessBal : 0,
             isExcessPTs ? 0 : excessBal
@@ -651,6 +683,33 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     }
 
     /* ========== GENERAL UTILS ========== */
+
+    /// @dev Reinvests assets held by this contract into the Roller's liquidity strategy,
+    ///      thereby densifying each vault share
+    /// @param assets Amount of asset
+    function _densifyShares(uint256 assets) internal {
+        uint256 _pti    = pti;
+        bytes32 _poolId = poolId;
+        (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
+        (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(_poolId);
+
+        uint256 targetForIssuance = _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored());
+
+        balances[1 - _pti] = assets - targetForIssuance;
+        if (assets - targetForIssuance > 0) {
+            balances[_pti] = divider.issue(address(adapter), maturity, targetForIssuance);
+        }
+
+        _joinPool(
+            _poolId,
+            BalancerVault.JoinPoolRequest({
+                assets: tokens,
+                maxAmountsIn: balances,
+                userData: abi.encode(balances, 0),
+                fromInternalBalance: false
+            })
+        );
+    }
 
     /// @dev Exit Assets from the Space pool and combine the PTs with YTs we have reserved for the given number of shares.
     /// @param shares number of shares to exit and combine with.
@@ -677,8 +736,8 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             })
         );
 
-        uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
         ptShare += pt.balanceOf(address(this)) - totalPTBal;
+        uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
         unchecked {
             // Safety: an inequality check is done before subtraction.
             if (ptShare > ytBal) {
@@ -733,8 +792,8 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     /// @dev Calculates the amount of Target needed for issuance such that the PT:Target ratio in
     ///      the Space pool will be preserved after issuing and joining issued PTs and remaining Target.
     /// @return asset Amount of Target that should be used for issuance.
-    function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale) 
-        internal view returns (uint256) 
+    function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale)
+        internal view returns (uint256)
     {
         return targetBal.mulWadUp(ptReserves.divWadUp(
             scale.mulWadDown(1e18 - ifee).mulWadDown(targetReserves) + ptReserves
@@ -750,7 +809,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
         return (balances[_pti], balances[1 - _pti]);
     }
 
-    /// @dev DecomposeShares works to break shares into their constituent parts, 
+    /// @dev DecomposeShares works to break shares into their constituent parts,
     ///      and also preview the assets required to mint a given number of shares.
     /// @return targetAmount Target the number of shares has a right to.
     /// @return ptAmount PTs the number of shares has a right to.
