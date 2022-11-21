@@ -779,9 +779,9 @@ contract AutoRollerTest is Test {
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
-        rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares + 1);
+        rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), previewedShares + 1);
 
-        uint256 receivedShares = rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedShares);
+        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), previewedShares);
 
         uint256 shareBalPost = autoRoller.balanceOf(address(this));
 
@@ -796,9 +796,9 @@ contract AutoRollerTest is Test {
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetError.selector));
-        rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets + 1);
+        rollerPeriphery.redeem(autoRoller, shareBalPost, address(this), previewedAssets + 1);
 
-        uint256 receivedAssets = rollerPeriphery.redeem(ERC4626(address(autoRoller)), shareBalPost, address(this), previewedAssets);
+        uint256 receivedAssets = rollerPeriphery.redeem(autoRoller, shareBalPost, address(this), previewedAssets);
 
         uint256 assetBalPost = target.balanceOf(address(this));
 
@@ -808,6 +808,52 @@ contract AutoRollerTest is Test {
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+    }
+
+    function testRollerPeripheryDepositRedeemUnderlying() public {
+        autoRoller.roll();
+
+        underlying.mint(address(this), 1.1e18);
+        underlying.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
+
+        uint256 previewedShares = autoRoller.previewDeposit(targetValue);
+        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
+        rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares + 1);
+
+        uint256 receivedShares = rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares);
+
+        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+
+        assertEq(previewedShares, receivedShares);
+        assertEq(receivedShares, shareBalPost - shareBalPre);
+
+        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+
+        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+
+        uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
+        uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinUnderlyingError.selector));
+        rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying + 1);
+
+        uint256 receivedUnderlying = rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying);
+
+        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+
+        assertEq(previewedUnderlying, receivedUnderlying);
+        assertEq(receivedUnderlying, underlyingBalPost - underlyingBalPre);
+
+        // No asset or share or underlying left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+        assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
     }
 
     function testRollerPeripheryMintWithdraw() public {
@@ -823,9 +869,9 @@ contract AutoRollerTest is Test {
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAssetError.selector));
-        rollerPeriphery.mint(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedAssets - 1);
+        rollerPeriphery.mint(autoRoller, 1.1e18, address(this), previewedAssets - 1);
 
-        uint256 pulledAssets = rollerPeriphery.mint(ERC4626(address(autoRoller)), 1.1e18, address(this), previewedAssets);
+        uint256 pulledAssets = rollerPeriphery.mint(autoRoller, 1.1e18, address(this), previewedAssets);
 
         uint256 assetBalPost = target.balanceOf(address(this));
 
@@ -840,9 +886,9 @@ contract AutoRollerTest is Test {
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
-        rollerPeriphery.withdraw(ERC4626(address(autoRoller)), pulledAssets * 0.99e18 / 1e18, address(this), previewedShares - 1);
+        rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares - 1);
 
-        uint256 pulledShares = rollerPeriphery.withdraw(ERC4626(address(autoRoller)), pulledAssets * 0.99e18 / 1e18, address(this), previewedAssets);
+        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares);
 
         uint256 shareBalPost = autoRoller.balanceOf(address(this));
 
@@ -854,6 +900,37 @@ contract AutoRollerTest is Test {
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
     }
 
+    function testRollerPeripheryMintWithdrawUnderlying() public {
+        autoRoller.roll();
+
+        underlying.mint(address(this), 1.1e18);
+        underlying.approve(address(rollerPeriphery), 1.1e18);
+
+        uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
+
+        uint256 previewedAssets = autoRoller.previewMint(0.9e18);
+        uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
+
+        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxUnderlyingError.selector));
+        uint256 valIn = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying - 1);
+
+        uint256 pulledUnderlying = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying);
+        uint256 pulledAssets = pulledUnderlying.divWadDown(mockAdapter.scale());
+
+        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+
+        assertApproxEqAbs(previewedUnderlying, pulledUnderlying, 1);
+        assertApproxEqAbs(pulledUnderlying, underlyingBalPre - underlyingBalPost, 1);
+
+        // No asset or share left in the periphery
+        assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
+        assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+        assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
+    }
+
     function testRollerPeripheryEject() public {
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
         rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
@@ -862,22 +939,22 @@ contract AutoRollerTest is Test {
 
         target.approve(address(rollerPeriphery), 1.1e18);
 
-        uint256 receivedShares = rollerPeriphery.deposit(ERC4626(address(autoRoller)), 1.1e18, address(this), 0);
+        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), 0);
 
         autoRoller.approve(address(rollerPeriphery), receivedShares);
 
         uint256 assets; uint256 excessBal; bool isExcessPTs;
         uint256 id = vm.snapshot();
-        (assets, excessBal, isExcessPTs) = rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), 0, 0);
+        (assets, excessBal, isExcessPTs) = rollerPeriphery.eject(autoRoller, receivedShares, address(this), 0, 0);
         vm.revertTo(id);
         
         // Min expected check should fail if it's below what's previewed, for assets or excess
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
-        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets + 1, excessBal);
+        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets + 1, excessBal);
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
-        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal + 1);
+        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets, excessBal + 1);
 
-        rollerPeriphery.eject(ERC4626(address(autoRoller)), receivedShares, address(this), assets, excessBal);
+        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets, excessBal);
     }
 
     function testExternalSettlement() public {

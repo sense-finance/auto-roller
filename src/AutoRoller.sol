@@ -46,6 +46,7 @@ interface PeripheryLike {
 
 interface OwnedAdapterLike {
     function target() external view returns (address);
+    function underlying() external view returns (address);
     function ifee() external view returns (uint256);
     function openSponsorWindow() external;
     function scale() external returns (uint256);
@@ -77,7 +78,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     DividerLike      internal immutable divider;
     BalancerVault    internal immutable balancerVault;
-    OwnedAdapterLike internal immutable adapter;
+    OwnedAdapterLike public   immutable adapter;
 
     uint256 internal immutable ifee; // Cached issuance fee.
     uint256 internal immutable minSwapAmount; // Min number of PTs that can be swapped out when exiting.
