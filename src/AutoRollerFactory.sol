@@ -45,14 +45,14 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         address rewardRecipient,
         uint256 targetDuration
     ) external returns (AutoRoller autoRoller) {
-        address target = adapter.target();
+        ERC20 target = ERC20(address(adapter.target()));
 
         uint256 id = rollers[address(adapter)].length;
 
         if (id > 0 && !isTrusted[msg.sender]) revert RollerQuantityLimitExceeded();
 
         bytes memory constructorArgs = abi.encode(
-            ERC20(target),
+            target,
             divider,
             address(periphery),
             address(periphery.spaceFactory()),
@@ -72,7 +72,18 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         autoRoller.setParam("OWNER", msg.sender);
 
         // Allow the new roller to move the roller periphery's target
-        rollerPeriphery.approve(ERC20(target), address(autoRoller));
+        if (target.allowance(address(rollerPeriphery), address(autoRoller)) == 0) {
+            rollerPeriphery.approve(target, address(autoRoller));
+        }
+
+        // Allow the adapter to move the roller periphery's underlying & target if it can't already
+        ERC20 underlying = ERC20(adapter.underlying());
+        if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {
+            rollerPeriphery.approve(underlying, address(adapter));
+        }
+        if (target.allowance(address(rollerPeriphery), address(adapter)) == 0) {
+            rollerPeriphery.approve(target, address(adapter));
+        }
 
         rollers[address(adapter)].push(autoRoller);
 
