@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.13;
+pragma solidity 0.8.15;
 
 import "forge-std/Script.sol";
 
@@ -49,7 +49,7 @@ contract TestnetDeploymentScript is Script {
         Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         Divider divider = Divider(spaceFactory.divider());
 
-        RollerUtils utils = new RollerUtils();
+        RollerUtils utils = new RollerUtils(address(divider));
 
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
 
