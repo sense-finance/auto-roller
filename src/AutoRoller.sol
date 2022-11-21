@@ -334,11 +334,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             if (excessBal < minSwapAmount) return;
 
             if (isExcessPTs) {
-                (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-                uint256 maxPTSale = _maxPTSell(ptReserves, targetReserves, space.adjustedTotalSupply());
-
-                if (excessBal > maxPTSale) revert InsufficientLiquidity(); // Need to eject, wait for more liquidity, or wait until a cooldown phase.
-
                 _swap(
                     BalancerVault.SingleSwap({
                         poolId: poolId,
@@ -356,7 +351,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     }
 
     /// @dev Joins the Space pool, issuing PTs in order to match the current pool's ratio of Target:PT
-    function afterDeposit(uint256 assets, uint256 shares) internal override {
+    function afterDeposit(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
             uint256 _supply = totalSupply; // Saves extra SLOADs.
             bytes32 _poolId = poolId;
@@ -364,15 +359,15 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
             (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(_poolId);
 
-            uint256 previewedLPBal = _supply - shares == 0 ?
-                shares : shares.mulDivUp(space.balanceOf(address(this)), _supply - shares); // _supply - shares b/c this is after minting new shares.
-
-            uint256 targetToJoin = previewedLPBal.mulDivUp(balances[1 - _pti], space.adjustedTotalSupply());
+            uint256 assetBal = asset.balanceOf(address(this));
+            uint256 targetToJoin = _supply - shares == 0 ? // _supply - shares b/c this is after minting new shares.
+                shares.mulDivUp(balances[1 - _pti], space.adjustedTotalSupply()) :
+                assetBal - _getTargetForIssuance(balances[_pti], balances[1 - _pti], assetBal, adapter.scaleStored());
 
             balances[1 - _pti] = targetToJoin;
 
-            if (assets - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity.
-                balances[_pti] = divider.issue(address(adapter), maturity, assets - targetToJoin);
+            if (assetBal - targetToJoin > 0) { // Assumption: this is false if Space has only Target liquidity.
+                balances[_pti] = divider.issue(address(adapter), maturity, assetBal - targetToJoin);
             }
 
             _joinPool(
@@ -430,8 +425,13 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             uint256 previewedLPBal = (assets - _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored()))
                 .mulDivDown(_space.adjustedTotalSupply(), targetReserves);
 
+            uint256 assetBal = asset.balanceOf(address(this));
+            uint256 assetBalLP = space.balanceOf(address(this)).mulDivDown(assets, previewedLPBal);
+            uint256 assetBalPT = pt.balanceOf(address(this)).divWadUp(adapter.scaleStored().mulWadDown(1e18 - ifee));
+
             // Shares represent proportional ownership of LP shares the vault holds.
-            return previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)));
+            return previewedLPBal.mulDivDown(totalSupply, _space.balanceOf(address(this)))
+                .mulDivDown(assetBalLP, assetBalPT + assetBalLP + assetBal);
         }
     }
 
@@ -445,7 +445,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
             (uint256 targetToJoin, uint256 ptsToJoin, , ) = _decomposeShares(ptReserves, targetReserves, shares, true);
 
-            return targetToJoin + ptsToJoin.divWadUp(adapter.scaleStored().mulWadDown(1e18 - ifee)); // targetToJoin + targetToIssue
+            return targetToJoin + ptsToJoin.divWadUp(adapter.scaleStored().mulWadDown(1e18 - ifee)) + 1; // targetToJoin + targetToIssue
         }
     }
 
@@ -463,25 +463,15 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             ptReserves     = ptReserves - ptBal;
             targetReserves = targetReserves - targetBal;
 
-            uint256 spaceSupply = space.adjustedTotalSupply();
-
             // Adjust balances for loose asset share.
-            ptBal       = ptBal       + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
-            targetBal   = targetBal   + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
-            spaceSupply = spaceSupply - lpBal;
+            ptBal     = ptBal     + shares.mulDivDown(pt.balanceOf(address(this)), totalSupply);
+            targetBal = targetBal + shares.mulDivDown(asset.balanceOf(address(this)), totalSupply);
+            uint256 spaceSupply = space.adjustedTotalSupply() - lpBal;
 
             if (ptBal > ytBal) {
                 unchecked {
-                    // Safety: an inequality check is done before ptBal - ytBal.
-                    //         shares must be lte total supply, so ptReserves & targetReserves wil always be gte ptBal & targetBal.
-                    uint256 maxPTSale = _maxPTSell(
-                        ptReserves,
-                        targetReserves,
-                        spaceSupply
-                    );
-
-                    // If there isn't enough liquidity to sell all of the PTs, sell the max that we can and ignore the remaining PTs.
-                    uint256 ptsToSell = _min(ptBal - ytBal, maxPTSale);
+                    // If there isn't enough liquidity to sell all of the PTs, the swap preview will fail.
+                    uint256 ptsToSell = ptBal - ytBal;
 
                     uint256 targetOut = ptsToSell > minSwapAmount ?
                         space.onSwapPreview(
@@ -501,9 +491,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
                 unchecked {
                     // Safety: an inequality check is done before ytBal - ptBal.
                     //         shares must be lte total supply, so ptReserves & targetReserves wil always be gte ptBal & targetBal.
-
-                    // If there isn't enough liquidity to sell all of the YTs, sell the max that we can and ignore the remaining YTs.
-                    uint256 ytsToSell = _min(ytBal - ptBal, ptReserves);
+                    uint256 ytsToSell = ytBal - ptBal;
 
                     // Target from combining YTs with PTs - target needed to buy PTs.
                     uint256 targetOut = ytsToSell > minSwapAmount ? 
@@ -546,7 +534,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
                 if (guess > supply) {
                     guess = supply;
                 }
-
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
                 if (answer > 0 && answer <= assets.mulWadDown(0.001e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
@@ -589,11 +576,9 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
             ptReserves     = ptReserves - ptBal;
             targetReserves = targetReserves - targetBal;
 
-            uint256 spaceSupply = space.adjustedTotalSupply();
-
-            ptBal       = ptBal       + lpBal.mulDivDown(pt.balanceOf(address(this)), spaceSupply);
-            targetBal   = targetBal   + lpBal.mulDivDown(asset.balanceOf(address(this)), spaceSupply);
-            spaceSupply = spaceSupply - lpBal;
+            ptBal     = ptBal     + shares.mulDivDown(pt.balanceOf(address(this)), totalSupply);
+            targetBal = targetBal + shares.mulDivDown(asset.balanceOf(address(this)), totalSupply);
+            uint256 spaceSupply = space.adjustedTotalSupply() - lpBal;
 
             bool isExcessPTs = ptBal > ytBal;
             uint256 diff = isExcessPTs ? ptBal - ytBal : ytBal - ptBal;
@@ -694,7 +679,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
         uint256 ytBal = shares.mulDivDown(yt.balanceOf(address(this)), supply);
         ptShare += pt.balanceOf(address(this)) - totalPTBal;
-
         unchecked {
             // Safety: an inequality check is done before subtraction.
             if (ptShare > ytBal) {
@@ -781,10 +765,10 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
         // Shares have a right to a portion of the PTs/asset floating around unencombered in this contract.
         return (
-            shares.mulDivUp(totalLPBal.mulDivUp(targetReserves, spaceSupply) + (withLoose ? asset.balanceOf(address(this)) : 0), supply),
-            shares.mulDivUp(totalLPBal.mulDivUp(ptReserves, spaceSupply) + (withLoose ? pt.balanceOf(address(this)) : 0), supply),
-            shares.mulDivUp(yt.balanceOf(address(this)), supply),
-            shares.mulDivUp(totalLPBal, supply)
+            shares.mulDivDown(totalLPBal.mulDivUp(targetReserves, spaceSupply) + (withLoose ? asset.balanceOf(address(this)) : 0), supply),
+            shares.mulDivDown(totalLPBal.mulDivUp(ptReserves, spaceSupply) + (withLoose ? pt.balanceOf(address(this)) : 0), supply),
+            shares.mulDivDown(yt.balanceOf(address(this)), supply),
+            shares.mulDivDown(totalLPBal, supply)
         );
     }
 
