@@ -46,7 +46,7 @@ contract RollerPeriphery is Trust {
     constructor() Trust(msg.sender) {}
 
     /// @notice Redeem vault shares with slippage protection 
-    /// @param vault ERC4626 vault
+    /// @param roller ERC4626 vault
     /// @param shares Number of shares to redeem
     /// @param receiver Destination address for the returned assets
     /// @param minAmountOut Minimum amount of assets returned

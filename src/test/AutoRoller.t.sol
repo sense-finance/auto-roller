@@ -922,25 +922,8 @@ contract AutoRollerTest is Test {
 
         uint256 underlyingBalPost = underlying.balanceOf(address(this));
 
-        assertApproxEq(previewedUnderlying, pulledUnderlying, 1);
-        assertApproxEq(pulledUnderlying, underlyingBalPre - underlyingBalPost, 1);
-
-        uint256 shareBalPre = autoRoller.balanceOf(address(this));
-
-        autoRoller.approve(address(rollerPeriphery), shareBalPre);
-
-        uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
-
-        // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
-        rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, address(this), previewedShares - 1);
-
-        uint256 pulledShares = rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, address(this), previewedShares);
-
-        uint256 shareBalPost = autoRoller.balanceOf(address(this));
-
-        assertEq(previewedShares, pulledShares);
-        assertEq(pulledShares, shareBalPre - shareBalPost);
+        assertApproxEqAbs(previewedUnderlying, pulledUnderlying, 1);
+        assertApproxEqAbs(pulledUnderlying, underlyingBalPre - underlyingBalPost, 1);
 
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);

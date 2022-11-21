@@ -72,15 +72,17 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
         autoRoller.setParam("OWNER", msg.sender);
 
         // Allow the new roller to move the roller periphery's target
-        rollerPeriphery.approve(target, address(autoRoller), type(uint256).max);
+        if (target.allowance(address(rollerPeriphery), address(autoRoller)) == 0) {
+            rollerPeriphery.approve(target, address(autoRoller));
+        }
 
         // Allow the adapter to move the roller periphery's underlying & target if it can't already
         ERC20 underlying = ERC20(adapter.underlying());
         if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {
-            rollerPeriphery.approve(underlying, address(adapter), type(uint256).max);
+            rollerPeriphery.approve(underlying, address(adapter));
         }
         if (target.allowance(address(rollerPeriphery), address(adapter)) == 0) {
-            rollerPeriphery.approve(target, address(adapter), type(uint256).max);
+            rollerPeriphery.approve(target, address(adapter));
         }
 
         rollers[address(adapter)].push(autoRoller);
