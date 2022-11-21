@@ -535,7 +535,7 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
                 }
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
-                if (answer > 0 && answer <= assets.mulWadDown(0.01e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
+                if (answer > 0 && answer <= assets.mulWadDown(0.001e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
                     break;
                 }
 
