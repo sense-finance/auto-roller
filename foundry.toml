@@ -2,7 +2,7 @@
 src = 'src'
 out = 'out'
 test = 'src/test'
-libs = ['lib', 'lib/space-v1/lib/','lib/sense-v1/node_modules/']
+libs = ['lib/solmate']
 verbosity = 3
 eth-rpc-url = "https://eth-goerli.alchemyapi.io/v2/JrCVyH87AyAZaGXaIaxhWce4x-JqR7z-"
 optimizer_runs = 10000
@@ -14,5 +14,8 @@ remappings = [
     'sense-v1-utils/=lib/sense-v1/pkg/utils/src/',
     '@rari-capital/=lib/sense-v1/node_modules/@rari-capital/',
     '@openzeppelin/contracts=lib/sense-v1/node_modules/@openzeppelin/contracts',
-    '@sense-finance/=lib/sense-v1/node_modules/@sense-finance/'
+    '@sense-finance/v1-utils/=lib/sense-v1/pkg/utils/src',
+    '@sense-finance/v1-fuse/=lib/sense-v1/pkg/fuse/src',
+    '@sense-finance/v1-core/=lib/sense-v1/pkg/core/src',
+    'forge-std/=lib/forge-std/src',
 ]

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.13;
+pragma solidity 0.8.15;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 
@@ -9,10 +9,12 @@ import { AutoRoller, DividerLike, OwnedAdapterLike, RollerUtils, PeripheryLike }
 import { BaseSplitCodeFactory } from "./BaseSplitCodeFactory.sol";
 
 interface RollerPeripheryLike {
-    function approve(ERC20,address,uint256) external;
+    function approve(ERC20,address) external;
 }
 
 contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
+    error RollerQuantityLimitExceeded();
+
     DividerLike internal immutable divider;
     address     internal immutable balancerVault;
 
@@ -45,6 +47,10 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
     ) external returns (AutoRoller autoRoller) {
         ERC20 target = ERC20(address(adapter.target()));
 
+        uint256 id = rollers[address(adapter)].length;
+
+        if (id > 0 && !isTrusted[msg.sender]) revert RollerQuantityLimitExceeded();
+
         bytes memory constructorArgs = abi.encode(
             target,
             divider,
@@ -55,7 +61,7 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
             utils,
             rewardRecipient
         );
-        bytes32 salt = keccak256(abi.encode(constructorArgs, rollers[address(adapter)].length));
+        bytes32 salt = keccak256(abi.encode(constructorArgs, id));
 
         autoRoller = AutoRoller(super._create(constructorArgs, salt));
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.13;
+pragma solidity 0.8.15;
 
 import "forge-std/Script.sol";
 
@@ -46,10 +46,10 @@ contract TestnetDeploymentScript is Script {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_3_0);
+        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         Divider divider = Divider(spaceFactory.divider());
 
-        RollerUtils utils = new RollerUtils();
+        RollerUtils utils = new RollerUtils(address(divider));
 
         RollerPeriphery rollerPeriphery = new RollerPeriphery();
 
@@ -94,7 +94,6 @@ contract TestnetDeploymentScript is Script {
 
         console2.log("Auto Roller ", address(autoRoller));
 
-        mockAdapter.setIsTrusted(address(autoRoller), true);
         periphery.onboardAdapter(address(mockAdapter), true);
         divider.setGuard(address(mockAdapter), type(uint256).max);
 

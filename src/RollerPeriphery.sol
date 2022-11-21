@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.13;
+pragma solidity 0.8.15;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
+
+import { Trust } from "sense-v1-utils/Trust.sol";
 
 import { AutoRoller } from "./AutoRoller.sol";
 
@@ -16,7 +18,7 @@ interface AdapterLike {
 }
 
 // Inspired by https://github.com/fei-protocol/ERC4626/blob/main/src/ERC4626Router.sol
-contract RollerPeriphery {
+contract RollerPeriphery is Trust {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
 
@@ -41,8 +43,10 @@ contract RollerPeriphery {
     /// @notice thrown when amount of assets or excess received is below the max set by caller.
     error MinAssetsOrExcessError();
 
-    /// @notice Redeem vault shares with slippage protection
-    /// @param roller AutoRoller vault
+    constructor() Trust(msg.sender) {}
+
+    /// @notice Redeem vault shares with slippage protection 
+    /// @param vault ERC4626 vault
     /// @param shares Number of shares to redeem
     /// @param receiver Destination address for the returned assets
     /// @param minAmountOut Minimum amount of assets returned
@@ -187,7 +191,7 @@ contract RollerPeriphery {
         }
     }
 
-    function approve(ERC20 token, address to, uint256 amount) public payable {
-        token.safeApprove(to, amount);
+    function approve(ERC20 token, address to) public payable requiresTrust {
+        token.safeApprove(to, type(uint256).max);
     }
 }

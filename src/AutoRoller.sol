@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity 0.8.13;
+pragma solidity 0.8.15;
 
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
 import { SafeTransferLib } from "solmate/utils/SafeTransferLib.sol";
+import { ReentrancyGuard } from "solmate/utils/ReentrancyGuard.sol";
 import { ERC4626 } from "solmate/mixins/ERC4626.sol";
 
 import { DateTime } from "./external/DateTime.sol";
@@ -54,7 +55,7 @@ interface OwnedAdapterLike {
     function setIsTrusted(address,bool) external;
 }
 
-contract AutoRoller is ERC4626 {
+contract AutoRoller is ERC4626, ReentrancyGuard {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using SafeCast for *;
@@ -100,8 +101,8 @@ contract AutoRoller is ERC4626 {
     address internal lastRoller; // Last address to call roll.
 
     // Separate slots to meet contract size limits.
+    uint256 public   maturity = MATURITY_NOT_SET;
     uint256 internal initScale;
-    uint256 public  maturity = MATURITY_NOT_SET;
     uint256 internal pti;
 
     uint256 internal maxRate        = 53144e19; // Max implied rate stretched to Space pool's TS period. (531440% over 12 years ≈ 200% APY)
@@ -548,7 +549,7 @@ contract AutoRoller is ERC4626 {
 
                 int256 answer = previewRedeem(guess.safeCastToUint()).safeCastToInt() - assets.safeCastToInt();
 
-                if (answer >= 0 && answer <= assets.mulWadDown(0.001e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
+                if (answer > 0 && answer <= assets.mulWadDown(0.001e18).safeCastToInt() || (prevAnswer == answer)) { // Err on the side of overestimating shares needed. Could reduce precision for gas efficiency.
                     break;
                 }
 
@@ -657,7 +658,7 @@ contract AutoRoller is ERC4626 {
             yt.transfer(receiver, excessBal);
         }
 
-        asset.transfer(receiver, assets = asset.balanceOf(address(this)));
+        asset.safeTransfer(receiver, assets = asset.balanceOf(address(this)));
         emit Ejected(msg.sender, receiver, owner, assets, shares,
             isExcessPTs ? excessBal : 0,
             isExcessPTs ? 0 : excessBal
@@ -708,12 +709,12 @@ contract AutoRoller is ERC4626 {
 
     /// @notice Transfer any token not included in the set {asset,yt,pt,space} to the rewards recipient.
     /// @param coin address of the coin to transfer out.
-    function claimRewards(ERC20 coin) external {
+    function claimRewards(ERC20 coin) external nonReentrant {
         require(coin != asset);
         if (maturity != MATURITY_NOT_SET) {
             require(coin != ERC20(address(yt)) && coin != pt && coin != ERC20(address(space)));
         }
-        coin.transfer(rewardRecipient, coin.balanceOf(address(this)));
+        coin.safeTransfer(rewardRecipient, coin.balanceOf(address(this)));
     }
 
     /* ========== BALANCER UTILS ========== */
@@ -857,7 +858,9 @@ contract RollerUtils {
     uint256 internal constant SECONDS_PER_YEAR = 31536000;
     uint256 internal constant ONE = 1e18;
 
-    address internal constant DIVIDER = 0x09B10E45A912BcD4E80a8A3119f0cfCcad1e1f12;
+    address internal immutable divider;
+
+    constructor(address _divider) { divider = _divider; }
 
     /// @notice Calculate a maturity timestamp around x months in the future on exactly the top of the month.
     /// @param monthsForward Number of months in to advance forward.
@@ -889,7 +892,7 @@ contract RollerUtils {
     /// @param space Maturity associated with the Series who's Space data this function is fetching.
     /// @return stretchedRate Rate implied by the previous Series stretched to the Space pool's timestretch period.
     function getNewTargetedRate(uint256 /* fallbackTargetedRate */, address adapter, uint256 prevMaturity, Space space) public returns (uint256) {
-        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(DIVIDER).series(adapter, prevMaturity);
+        (, uint48 prevIssuance, , , , , uint256 iscale, uint256 mscale, ) = DividerLike(divider).series(adapter, prevMaturity);
 
         require(mscale != 0);
 
