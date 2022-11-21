@@ -97,10 +97,8 @@ contract RollerPeriphery {
             revert MaxSharesError();
         }
 
-        ERC20(adapter.underlying()).safeTransfer(
-            receiver,
-            adapter.unwrapTarget(roller.asset().balanceOf(address(this)))
-        );
+        uint256 underlyingOut = adapter.unwrapTarget(roller.asset().balanceOf(address(this)));
+        ERC20(adapter.underlying()).safeTransfer(receiver, underlyingOut);
     }
 
     /// @notice Mint vault shares with slippage protection
@@ -134,8 +132,8 @@ contract RollerPeriphery {
 
         adapter.wrapUnderlying(underlyingIn); // convert underlying to asset
 
-        uint256 targetIn = roller.mint(shares, receiver);
-        if ((underlyingIn = targetIn.mulWadDown(adapter.scale())) > maxAmountIn) {
+        uint256 assetIn = roller.mint(shares, receiver);
+        if ((underlyingIn = assetIn.mulWadDown(adapter.scale())) > maxAmountIn) {
             revert MaxUnderlyingError();
         }
     }
