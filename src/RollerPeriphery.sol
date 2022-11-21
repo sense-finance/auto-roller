@@ -41,7 +41,7 @@ contract RollerPeriphery {
     /// @notice thrown when amount of assets or excess received is below the max set by caller.
     error MinAssetsOrExcessError();
 
-    /// @notice Redeem vault shares with slippage protection 
+    /// @notice Redeem vault shares with slippage protection
     /// @param roller AutoRoller vault
     /// @param shares Number of shares to redeem
     /// @param receiver Destination address for the returned assets
@@ -53,6 +53,12 @@ contract RollerPeriphery {
         }
     }
 
+    /// @notice Redeem vault shares and convert to underlying, with slippage protection
+    /// @param roller AutoRoller vault
+    /// @param shares Number of shares to redeem
+    /// @param receiver Destination address for the returned assets
+    /// @param minAmountOut Minimum amount of underlying returned
+    /// @return underlyingOut Amount of underlying converted from Target redeemable by the given number of shares
     function redeemForUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut) external returns (uint256 underlyingOut) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
@@ -63,7 +69,7 @@ contract RollerPeriphery {
         ERC20(adapter.underlying()).safeTransfer(receiver, underlyingOut);
     }
 
-    /// @notice Withdraw underlying asset from vault with slippage protection 
+    /// @notice Withdraw asset from vault with slippage protection
     /// @param roller AutoRoller vault
     /// @param assets Amount of asset requested for withdrawal
     /// @param receiver Destination address for the returned assets
@@ -75,10 +81,17 @@ contract RollerPeriphery {
         }
     }
 
+    /// @notice Withdraw asset from vault and convert to underlying, with slippage protection
+    /// @param roller AutoRoller vault
+    /// @param underlyingOut Amount of underlying requested for withdrawal
+    /// @param receiver Destination address for the returned underlying
+    /// @param maxSharesOut Maximum amount of shared burned
+    /// @return shares Number of shares to redeem
     function withdrawUnderlying(AutoRoller roller, uint256 underlyingOut, address receiver, uint256 maxSharesOut) external returns (uint256 shares) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
-        uint256 assetOut = underlyingOut.divWadDown(adapter.scale()); // Tokens out, round down.
+        // asset converted from underlying (round down)
+        uint256 assetOut = underlyingOut.divWadDown(adapter.scale());
 
         if ((shares = roller.withdraw(assetOut, address(this), msg.sender)) > maxSharesOut) {
             revert MaxSharesError();
@@ -90,7 +103,7 @@ contract RollerPeriphery {
         );
     }
 
-    /// @notice Mint vault shares with slippage protection 
+    /// @notice Mint vault shares with slippage protection
     /// @param roller AutoRoller vault
     /// @param shares Number of shares to mint
     /// @param receiver Destination address for the returned shares
@@ -104,15 +117,22 @@ contract RollerPeriphery {
         }
     }
 
+    /// @notice Convert underlying to asset and mint vault shares with slippage protection
+    /// @param roller AutoRoller vault
+    /// @param shares Number of shares to mint
+    /// @param receiver Destination address for the returned shares
+    /// @param maxAmountIn Maximum amount of underlying pulled from msg.sender
+    /// @return underlyingIn Amount of underlying pulled from msg.sender and used to mint vault shares
     function mintFromUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn) external returns (uint256 underlyingIn) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
         ERC20(adapter.underlying()).safeTransferFrom(
             msg.sender,
             address(this),
-            underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()) // Tokens in, round up.
+            underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()) // underlying converted from asset (round up)
         );
-        adapter.wrapUnderlying(underlyingIn);
+
+        adapter.wrapUnderlying(underlyingIn); // convert underlying to asset
 
         uint256 targetIn = roller.mint(shares, receiver);
         if ((underlyingIn = targetIn.mulWadDown(adapter.scale())) > maxAmountIn) {
@@ -120,7 +140,7 @@ contract RollerPeriphery {
         }
     }
 
-    /// @notice Deposit underlying asset into vault with slippage protection 
+    /// @notice Deposit asset into vault with slippage protection
     /// @param roller AutoRoller vault
     /// @param assets Amount of asset pulled from msg.sender and used to mint vault shares
     /// @param receiver Destination address for the returned shares
@@ -134,6 +154,12 @@ contract RollerPeriphery {
         }
     }
 
+    /// @notice Convert underlying to asset and deposit into vault with slippage protection
+    /// @param roller AutoRoller vault
+    /// @param underlyingIn Amount of underlying pulled from msg.sender and used to mint vault shares
+    /// @param receiver Destination address for the returned shares
+    /// @param minSharesOut Minimum amount of returned shares
+    /// @return shares Number of shares minted by the vault and returned to msg.sender
     function depositUnderlying(AutoRoller roller, uint256 underlyingIn, address receiver, uint256 minSharesOut) external returns (uint256 shares) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
@@ -149,7 +175,7 @@ contract RollerPeriphery {
     /// @param shares Number of shares to eject with.
     /// @param receiver Destination address for the constituent assets.
     /// @param minAssetsOut Minimum amount of assets returned
-    /// @param minExcessOut Minimum excess PT/YT returned 
+    /// @param minExcessOut Minimum excess PT/YT returned
     /// @return assets Amount of asset redeemable by the given number of shares.
     /// @return excessBal Amount of excess PT or YT redeemable by the given number of shares.
     /// @return isExcessPTs Whether the excess token is a YT or PT.
