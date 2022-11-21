@@ -324,6 +324,7 @@ contract AutoRoller is ERC4626 {
     /* ========== 4626 SPEC ========== */
     // see: https://eips.ethereum.org/EIPS/eip-4626
 
+    /// @dev Collect asset from roller's YT balance & densify shares before depositing
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
         if (maturity != MATURITY_NOT_SET) {
             yt.collect();
@@ -336,6 +337,7 @@ contract AutoRoller is ERC4626 {
         return super.deposit(assets, receiver);
     }
 
+    /// @dev Collect asset from roller's YT balance & densify shares before minting
     function mint(uint256 shares, address receiver) public override returns (uint256) {
         if (maturity != MATURITY_NOT_SET) {
             yt.collect();
@@ -415,11 +417,11 @@ contract AutoRoller is ERC4626 {
     function totalAssets() public view override returns (uint256) {
         if (maturity == MATURITY_NOT_SET) {
             return asset.balanceOf(address(this));
-        } 
+        }
         else {
             Space _space = space;
             (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-            
+
             (uint256 targetBal, uint256 ptBal, uint256 ytBal, ) = _decomposeShares(ptReserves, targetReserves, totalSupply, true);
 
             uint256 ptSpotPrice = _space.getPriceFromImpliedRate(
@@ -530,7 +532,7 @@ contract AutoRoller is ERC4626 {
                     uint256 ytsToSell = _min(ytBal - ptBal, ptReserves);
 
                     // Target from combining YTs with PTs - target needed to buy PTs.
-                    uint256 targetOut = ytsToSell > minSwapAmount ? 
+                    uint256 targetOut = ytsToSell > minSwapAmount ?
                         ytsToSell.divWadDown(scale) - space.onSwapPreview(
                             false,
                             false,
@@ -695,6 +697,9 @@ contract AutoRoller is ERC4626 {
 
     /* ========== GENERAL UTILS ========== */
 
+    /// @dev Reinvests assets held by this contract into the Roller's liquidity strategy,
+    ///      thereby densifying each vault share
+    /// @param assets Amount of asset
     function _densifyShares(uint256 assets) internal {
         uint256 _pti    = pti;
         bytes32 _poolId = poolId;
@@ -801,8 +806,8 @@ contract AutoRoller is ERC4626 {
     /// @dev Calculates the amount of Target needed for issuance such that the PT:Target ratio in
     ///      the Space pool will be preserved after issuing and joining issued PTs and remaining Target.
     /// @return asset Amount of Target that should be used for issuance.
-    function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale) 
-        internal view returns (uint256) 
+    function _getTargetForIssuance(uint256 ptReserves, uint256 targetReserves, uint256 targetBal, uint256 scale)
+        internal view returns (uint256)
     {
         return targetBal.mulWadUp(ptReserves.divWadUp(
             scale.mulWadDown(1e18 - ifee).mulWadDown(targetReserves) + ptReserves
@@ -818,7 +823,7 @@ contract AutoRoller is ERC4626 {
         return (balances[_pti], balances[1 - _pti]);
     }
 
-    /// @dev DecomposeShares works to break shares into their constituent parts, 
+    /// @dev DecomposeShares works to break shares into their constituent parts,
     ///      and also preview the assets required to mint a given number of shares.
     /// @return targetAmount Target the number of shares has a right to.
     /// @return ptAmount PTs the number of shares has a right to.
