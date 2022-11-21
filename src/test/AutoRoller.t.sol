@@ -291,8 +291,8 @@ contract AutoRollerTest is Test {
     function testFuzzEjectYieldCollection(uint256 scaleDst, uint256 deposit) public {
         mockAdapter.setScale(1.1e18);
 
-        scaleDst = bound(scaleDst, 1.1e18, 1000000e18);
-        deposit = bound(deposit, 1e18, 1000000e18);
+        scaleDst = bound(scaleDst, 1.1e18, 10000e18);
+        deposit = bound(deposit, 1e18, 10000e18);
 
         // 1. Deposit during the initial cooldown phase.
         target.mint(address(this), deposit);
