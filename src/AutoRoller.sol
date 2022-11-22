@@ -328,35 +328,29 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
 
     /// @dev Collect asset from roller's YT balance & densify shares before depositing
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
-        if (maturity != MATURITY_NOT_SET) {
-            yt.collect();
-            uint256 assetBal = asset.balanceOf(address(this));
-            if (assetBal >= firstDeposit) {
-                _densifyShares(assetBal);
-            }
-        }
-
+        if (maturity != MATURITY_NOT_SET) yt.collect();
         return super.deposit(assets, receiver);
     }
 
     /// @dev Collect asset from roller's YT balance & densify shares before minting
     function mint(uint256 shares, address receiver) public override returns (uint256) {
-        if (maturity != MATURITY_NOT_SET) {
-            yt.collect();
-            uint256 assetBal = asset.balanceOf(address(this));
-            if (assetBal >= firstDeposit) {
-                _densifyShares(assetBal);
-            }
-        }
-
+        if (maturity != MATURITY_NOT_SET) yt.collect();
         return super.mint(shares, receiver);
     }
 
+    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) yt.collect();
+        return super.redeem(shares, receiver, owner);
+    }
+
+    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) yt.collect();
+        return super.withdraw(assets, receiver, owner);
+    }
 
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
-             yt.collect();
             (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(shares);
 
             if (excessBal < minSwapAmount) return;
@@ -683,33 +677,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     }
 
     /* ========== GENERAL UTILS ========== */
-
-    /// @dev Reinvests assets held by this contract into the Roller's liquidity strategy,
-    ///      thereby densifying each vault share
-    /// @param assets Amount of asset
-    function _densifyShares(uint256 assets) internal {
-        uint256 _pti    = pti;
-        bytes32 _poolId = poolId;
-        (uint256 ptReserves, uint256 targetReserves) = _getSpaceReserves();
-        (ERC20[] memory tokens, uint256[] memory balances, ) = balancerVault.getPoolTokens(_poolId);
-
-        uint256 targetForIssuance = _getTargetForIssuance(ptReserves, targetReserves, assets, adapter.scaleStored());
-
-        balances[1 - _pti] = assets - targetForIssuance;
-        if (assets - targetForIssuance > 0) {
-            balances[_pti] = divider.issue(address(adapter), maturity, targetForIssuance);
-        }
-
-        _joinPool(
-            _poolId,
-            BalancerVault.JoinPoolRequest({
-                assets: tokens,
-                maxAmountsIn: balances,
-                userData: abi.encode(balances, 0),
-                fromInternalBalance: false
-            })
-        );
-    }
 
     /// @dev Exit Assets from the Space pool and combine the PTs with YTs we have reserved for the given number of shares.
     /// @param shares number of shares to exit and combine with.
