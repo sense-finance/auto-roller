@@ -330,10 +330,6 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
         if (maturity != MATURITY_NOT_SET) {
             yt.collect();
-            uint256 assetBal = asset.balanceOf(address(this));
-            if (assetBal >= firstDeposit) {
-                _densifyShares(assetBal);
-            }
         }
 
         return super.deposit(assets, receiver);
@@ -343,20 +339,30 @@ contract AutoRoller is ERC4626, ReentrancyGuard {
     function mint(uint256 shares, address receiver) public override returns (uint256) {
         if (maturity != MATURITY_NOT_SET) {
             yt.collect();
-            uint256 assetBal = asset.balanceOf(address(this));
-            if (assetBal >= firstDeposit) {
-                _densifyShares(assetBal);
-            }
         }
 
         return super.mint(shares, receiver);
     }
 
+    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+        }
+
+        return super.redeem(shares, receiver, owner);
+    }
+
+    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
+        if (maturity != MATURITY_NOT_SET) {
+            yt.collect();
+        }
+
+        return super.withdraw(assets, receiver, owner);
+    }
 
     /// @dev exit LP shares commensurate the given number of shares, and sell the excess PTs or YTs into Target if possible.
     function beforeWithdraw(uint256, uint256 shares) internal override {
         if (maturity != MATURITY_NOT_SET) {
-             yt.collect();
             (uint256 excessBal, bool isExcessPTs) = _exitAndCombine(shares);
 
             if (excessBal < minSwapAmount) return;
