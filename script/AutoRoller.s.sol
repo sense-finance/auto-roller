@@ -23,24 +23,11 @@ import { RollerPeriphery } from "../src/RollerPeriphery.sol";
 import { AutoRollerFactory } from "../src/AutoRollerFactory.sol";
 import { ProtocolFeesController, Authentication } from "../src/test/AutoRoller.t.sol";
 
-contract TestnetDeploymentScript is Script {
-
-    address public constant REWARDS_RECIPIENT = address(1);
-    uint256 public constant TARGET_DURATION = 3;
-    uint256 public constant TARGETED_RATE = 2.9e18;
-
+contract MainnetDeploymentScript is Script {
     function run() external {
         vm.startBroadcast();
 
         console.log("Deploying from:", msg.sender);
-
-        MockERC20 target = new MockERC20("cUSDC", "cUSDC", 18);
-        MockERC20 underlying = new MockERC20("USDC", "USDC", 18);
-        MockERC20 stake = new MockERC20("STAKE", "ST", 18);
-
-        console2.log("Target:", address(target));
-        console2.log("Underlying:", address(underlying));
-        console2.log("Stake:", address(stake));
 
         (BalancerVault balancerVault, SpaceFactoryLike spaceFactory) = (
             BalancerVault(AddressBook.BALANCER_VAULT),
@@ -49,9 +36,9 @@ contract TestnetDeploymentScript is Script {
         Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         Divider divider = Divider(spaceFactory.divider());
 
-        RollerUtils utils = new RollerUtils(address(divider));
+        RollerUtils utils = RollerUtils(AddressBook.ROLLER_UTILS);
 
-        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        RollerPeriphery rollerPeriphery = RollerPeriphery(AddressBook.ROLLER_PERIPHERY);
 
         AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
@@ -64,51 +51,8 @@ contract TestnetDeploymentScript is Script {
 
         console2.log("Auto Roller Factory:", address(arFactory));
 
-        BaseAdapter.AdapterParams memory mockAdapterParams = BaseAdapter.AdapterParams({
-            oracle: address(0),
-            stake: address(stake),
-            stakeSize: 0.1e18,
-            minm: 0, // 0 minm, so there's not lower bound on future maturity
-            maxm: type(uint64).max, // large maxm, so there's not upper bound on future maturity
-            mode: 0, // monthly maturities
-            tilt: 0, // no principal reserved for YTs
-            level: 31 // default level, everything is allowed except for the redemption cb
-        });
-
-        MockOwnableAdapter mockAdapter = new MockOwnableAdapter(
-            address(divider),
-            address(target),
-            address(underlying),
-            mockAdapterParams
-        );
-
-        console2.log("Mock Adapter:", address(mockAdapter));
-
-        mockAdapter.setIsTrusted(address(arFactory), true);
-
-        AutoRoller autoRoller = arFactory.create(
-            OwnedAdapterLike(address(mockAdapter)),
-            REWARDS_RECIPIENT,
-            TARGET_DURATION
-        );
-
-        console2.log("Auto Roller ", address(autoRoller));
-
-        periphery.onboardAdapter(address(mockAdapter), true);
-        divider.setGuard(address(mockAdapter), type(uint256).max);
-
-        target.mint(msg.sender, 2e18);
-        target.approve(address(autoRoller), 2e18);
-
-        // Set protocol fees
-        ProtocolFeesController protocolFeesCollector = ProtocolFeesController(balancerVault.getProtocolFeesCollector());
-        Authentication authorizer = Authentication(balancerVault.getAuthorizer());
-        bytes32 actionId = Authentication(address(protocolFeesCollector)).getActionId(protocolFeesCollector.setSwapFeePercentage.selector);
-        authorizer.grantRole(actionId, msg.sender);
-        protocolFeesCollector.setSwapFeePercentage(0.1e18);
-
-        // Roll into the first Series
-        autoRoller.roll();
+        arFactory.setIsTrusted(AddressBook.SENSE_MULTISIG, true);
+        arFactory.setIsTrusted(msg.sender, false);
 
         vm.stopBroadcast();
     }
