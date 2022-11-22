@@ -24,15 +24,13 @@ contract AutoRollerFactory is Trust, BaseSplitCodeFactory {
 
     mapping(address => AutoRoller[]) public rollers;
 
-    /// @dev `_creationCode` should equal `type(AutoRoller).creationCode`
     constructor(
         DividerLike _divider,
         address _balancerVault,
         address _periphery,
         address _rollerPeriphery,
-        RollerUtils _utils,
-        bytes memory _creationCode
-    ) Trust(msg.sender) BaseSplitCodeFactory(_creationCode) {
+        RollerUtils _utils
+    ) Trust(msg.sender) BaseSplitCodeFactory(type(AutoRoller).creationCode) {
         divider         = _divider;
         balancerVault   = _balancerVault;
         periphery       = PeripheryLike(_periphery);
