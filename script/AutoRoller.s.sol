@@ -58,8 +58,7 @@ contract TestnetDeploymentScript is Script {
             address(balancerVault),
             address(periphery),
             address(rollerPeriphery),
-            utils,
-            type(AutoRoller).creationCode
+            utils
         );
 
         console2.log("Auto Roller Factory:", address(arFactory));

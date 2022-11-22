@@ -120,8 +120,7 @@ contract AutoRollerTest is Test {
             address(balancerVault),
             address(periphery),
             address(rollerPeriphery),
-            utils,
-            type(AutoRoller).creationCode
+            utils
         );
 
         mockAdapter.setIsTrusted(address(arFactory), true);
