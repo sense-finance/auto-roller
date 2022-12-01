@@ -63,10 +63,14 @@ By using `AutoRoller.withdraw`, the user exits their liquidity position and rece
 
 ### Mainnet
 
-| Chain   | Address                                                                                                                                        |
+| Chain   | Address |
 | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| AutoRoller1 | TBD                 |
-| RollerPeriphery  | TBD
+| [RollerFactory](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRollerFactory.sol) | [0x3B0f35bDD6Da9e3b8513c58Af8Fdf231f60232E5](https://etherscan.io/address/0x3B0f35bDD6Da9e3b8513c58Af8Fdf231f60232E5#code)    |
+| [RollerPeriphery](https://github.com/sense-finance/auto-roller/blob/main/src/RollerPeriphery.sol)  | [0xF3244CDCC765B15CbE1479c564f5fa31125d4FC3](https://etherscan.io/address/0xF3244CDCC765B15CbE1479c564f5fa31125d4FC3#code) |
+| [RollerUtils](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRoller.sol) | [0xb6f7643fd0831eda3BAbe20EE9c98DA4D473807e](https://etherscan.io/address/0xb6f7643fd0831eda3BAbe20EE9c98DA4D473807e) |
+| [wstETHRoller](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRoller.sol) | [0xeb9e7e1F892Bb2931e8C319D6F10FDf147090818](https://etherscan.io/address/0xeb9e7e1F892Bb2931e8C319D6F10FDf1470908183#code) |
+| [maUSDCRoller](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRoller.sol) | [0x5A41f64eaf49d1582A289B197A4c5D64b2342aAe](https://etherscan.io/address/0x5A41f64eaf49d1582A289B197A4c5D64b2342aAe3#code) |
+| [maUSDTRoller](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRoller.sol) | [0x321DfB34851E1663C91d07Cb5496e55A70aDE253](https://etherscan.io/address/0x321DfB34851E1663C91d07Cb5496e55A70aDE2533#code) |
 
 ## Development
 
