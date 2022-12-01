@@ -63,7 +63,7 @@ By using `AutoRoller.withdraw`, the user exits their liquidity position and rece
 
 ### Mainnet
 
-| Chain   | Address |
+| Contract   | Address |
 | ------- | ------------------------------------------------------------------------------------------------------------------------- |
 | [RollerFactory](https://github.com/sense-finance/auto-roller/blob/main/src/AutoRollerFactory.sol) | [0x3B0f35bDD6Da9e3b8513c58Af8Fdf231f60232E5](https://etherscan.io/address/0x3B0f35bDD6Da9e3b8513c58Af8Fdf231f60232E5#code)    |
 | [RollerPeriphery](https://github.com/sense-finance/auto-roller/blob/main/src/RollerPeriphery.sol)  | [0xF3244CDCC765B15CbE1479c564f5fa31125d4FC3](https://etherscan.io/address/0xF3244CDCC765B15CbE1479c564f5fa31125d4FC3#code) |
