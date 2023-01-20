@@ -77,12 +77,12 @@ contract AutoRollerTest is Test {
 
         scalingFactor = 10**(18 - target.decimals());
 
-        (balancerVault, spaceFactory) = (
+        (balancerVault, spaceFactory, divider, periphery) = (
             BalancerVault(AddressBook.BALANCER_VAULT),
-            SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
+            SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0),
+            Divider(AddressBook.DIVIDER_1_2_0),
+            Periphery(AddressBook.PERIPHERY_1_4_0)
         );
-        periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
-        divider = Divider(spaceFactory.divider());
 
         vm.label(address(spaceFactory), "SpaceFactory");
         vm.label(address(divider), "Divider");
@@ -133,7 +133,7 @@ contract AutoRollerTest is Test {
         );
 
         // Start multisig (admin) prank calls   
-        vm.prank(AddressBook.SENSE_DEPLOYER);
+        vm.prank(AddressBook.SENSE_MULTISIG);
         periphery.onboardAdapter(address(mockAdapter), true);
 
         vm.prank(AddressBook.SENSE_MULTISIG);
@@ -149,15 +149,6 @@ contract AutoRollerTest is Test {
         deal(address(stake), address(this), 1e18);
         stake.allowance(address(this), address(autoRoller));
         stake.safeApprove(address(autoRoller), 1e18);
-
-        // Set protocol fees
-        vm.startPrank(AddressBook.SENSE_DEPLOYER);
-        ProtocolFeesController protocolFeesCollector = ProtocolFeesController(balancerVault.getProtocolFeesCollector());
-        Authentication authorizer = Authentication(balancerVault.getAuthorizer());
-        bytes32 actionId = Authentication(address(protocolFeesCollector)).getActionId(protocolFeesCollector.setSwapFeePercentage.selector);
-        authorizer.grantRole(actionId, address(this));
-        vm.stopPrank();
-        protocolFeesCollector.setSwapFeePercentage(0.1e18);
     }
 
     // Auth
