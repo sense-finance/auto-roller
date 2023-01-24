@@ -37,6 +37,7 @@ interface YTLike {
 }
 
 interface PeripheryLike {
+    function deployAdapter(address, address, bytes memory) external returns (address);
     function sponsorSeries(address, uint256, bool) external returns (ERC20, YTLike);
     function swapYTsForTarget(address, uint256, uint256) external returns (uint256);
     function create(address, uint256) external returns (address);
