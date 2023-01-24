@@ -63,7 +63,7 @@ contract AutoRollerAdapterDeployerTest is Test {
 
         // We expect the first roll to fail as it needs to make a small initial deposit in target.
         vm.expectRevert("TRANSFER_FROM_FAILED");
-        AutoRoller(ar).roll();
+        ar.roll();
     }
 
      /* ========== EVENTS ========== */

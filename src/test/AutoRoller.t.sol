@@ -77,7 +77,7 @@ contract AutoRollerTest is Test {
 
         scalingFactor = 10**(18 - target.decimals());
 
-        (balancerVault, spaceFactory) = (
+        (balancerVault, spaceFactory, divider, periphery) = (
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0),
             Divider(AddressBook.DIVIDER_1_2_0),
