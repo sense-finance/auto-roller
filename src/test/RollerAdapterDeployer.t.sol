@@ -8,21 +8,21 @@ import { AddressBook } from "./utils/AddressBook.sol";
 
 import { MockERC20 } from "solmate/test/utils/mocks/MockERC20.sol";
 import { MockERC4626 } from "solmate/test/utils/mocks/MockERC4626.sol";
-import { AutoRollerAdapterDeployer } from "../AutoRollerAdapterDeployer.sol";
+import { RollerAdapterDeployer } from "../RollerAdapterDeployer.sol";
 import { AutoRollerFactory } from "../AutoRollerFactory.sol";
 import { AutoRoller, OwnedAdapterLike } from "../AutoRoller.sol";
 import { OwnableERC4626Factory } from "sense-v1-core/adapters/abstract/factories/OwnableERC4626Factory.sol";
 import { Divider } from "sense-v1-core/Divider.sol";
 import { Periphery } from "sense-v1-core/Periphery.sol";
 
-contract AutoRollerAdapterDeployerTest is Test {
+contract RollerAdapterDeployerTest is Test {
     MockERC4626 target;
     MockERC20 underlying;
 
     address public constant REWARDS_RECIPIENT = address(0x1);
     uint256 public constant TARGET_DURATION = 3;
 
-    AutoRollerAdapterDeployer deployer;
+    RollerAdapterDeployer deployer;
     address adapterFactory;
 
     function setUp() public {
@@ -41,7 +41,7 @@ contract AutoRollerAdapterDeployerTest is Test {
         vm.prank(AddressBook.SENSE_MULTISIG);
         OwnableERC4626Factory(adapterFactory).supportTarget(address(target), true);
 
-        deployer = new AutoRollerAdapterDeployer(address(divider));
+        deployer = new RollerAdapterDeployer(address(divider));
     }
 
     function testDeployAdapterAndRoller() public {

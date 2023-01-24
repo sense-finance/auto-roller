@@ -10,7 +10,7 @@ interface OwnableFactoryLike {
     function deployAdapter(address, bytes memory) external returns (address);
 }
 
-contract AutoRollerAdapterDeployer {
+contract RollerAdapterDeployer {
     Divider public immutable divider;
 
     constructor(address _divider) {
