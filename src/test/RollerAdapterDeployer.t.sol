@@ -64,6 +64,14 @@ contract RollerAdapterDeployerTest is Test {
         // We expect the first roll to fail as it needs to make a small initial deposit in target.
         vm.expectRevert("TRANSFER_FROM_FAILED");
         ar.roll();
+
+        // We expect the address calling deploy to be the owner of the roller.
+        uint256 cooldownPre = ar.cooldown();
+        ar.setParam("COOLDOWN", 5);
+        uint256 cooldownPost = ar.cooldown();
+
+        assertEq(cooldownPost, 5);
+        assertTrue(cooldownPre != cooldownPost);
     }
 
      /* ========== EVENTS ========== */
