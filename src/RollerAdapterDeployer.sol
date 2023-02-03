@@ -27,6 +27,7 @@ contract RollerAdapterDeployer {
         adapter = Periphery(divider.periphery()).deployAdapter(factory, target, data);
         AutoRollerFactory rlvFactory = AutoRollerFactory(OwnableFactoryLike(factory).rlvFactory());
         autoRoller = rlvFactory.create(OwnedAdapterLike(adapter), rewardRecipient, targetDuration);
+        autoRoller.setParam("OWNER", msg.sender);
 
         emit RollerAdapterDeployed(address(autoRoller), adapter);
     }
