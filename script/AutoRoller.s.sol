@@ -15,6 +15,7 @@ import { Errors as SenseCoreErrors } from "sense-v1-utils/libs/Errors.sol";
 
 import { Space } from "../src/interfaces/Space.sol";
 import { BalancerVault } from "../src/interfaces/BalancerVault.sol";
+import { IPermit2 } from "../src/interfaces/IPermit2.sol";
 
 import { MockOwnableAdapter, BaseAdapter } from "../src/test/utils/MockOwnedAdapter.sol";
 import { AddressBook } from "../src/test/utils/AddressBook.sol";
@@ -46,12 +47,13 @@ contract TestnetDeploymentScript is Script {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
+
         Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
         Divider divider = Divider(spaceFactory.divider());
 
         RollerUtils utils = new RollerUtils(address(divider));
 
-        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2),AddressBook.EXCHANGE_PROXY);
 
         AutoRollerFactory arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),

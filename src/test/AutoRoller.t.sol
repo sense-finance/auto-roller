@@ -22,6 +22,7 @@ import { BalancerVault } from "../interfaces/BalancerVault.sol";
 
 import { MockOwnableAdapter } from "./utils/MockOwnedAdapter.sol";
 import { AddressBook } from "./utils/AddressBook.sol";
+import { Permit2Helper } from "./utils/Permit2Helper.sol";
 import { AutoRoller, RollerUtils, SpaceFactoryLike, DividerLike, PeripheryLike, OwnedAdapterLike } from "../AutoRoller.sol";
 import { AutoRollerFactory } from "../AutoRollerFactory.sol";
 import { RollerPeriphery } from "../RollerPeriphery.sol";
@@ -35,7 +36,11 @@ interface ProtocolFeesController {
     function setSwapFeePercentage(uint256) external;
 }
 
-contract AutoRollerTest is Test {
+interface OldPeripheryLike {
+    function swapYTsForTarget(address adapter, uint256 maturity, uint256 ytBal) external;
+}
+
+contract AutoRollerTest is Test, Permit2Helper {
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for int128;
     using SafeTransferLib for ERC20;
@@ -49,8 +54,8 @@ contract AutoRollerTest is Test {
 
     uint256 scalingFactor;
 
-    address alice = address(0x1337);
-    address bob = address(0x133701);
+    // address alice = address(0x1337);
+    // address bob = address(0x133701);
 
     MockERC20 target;
     MockERC20 underlying;
@@ -113,7 +118,7 @@ contract AutoRollerTest is Test {
 
         utils = new RollerUtils(address(divider));
 
-        rollerPeriphery = new RollerPeriphery();
+        rollerPeriphery = new RollerPeriphery(permit2, address(0));
 
         arFactory = new AutoRollerFactory(
             DividerLike(address(divider)),
@@ -506,6 +511,7 @@ contract AutoRollerTest is Test {
         assertEq(actualMint, previewedMint);
 
         uint256 previewedRedeem = autoRoller.previewRedeem(actualMint);
+
         vm.prank(alice);
         uint256 actualRedeem = autoRoller.redeem(actualMint, alice, alice);
         assertEq(actualRedeem, previewedRedeem);
@@ -778,7 +784,7 @@ contract AutoRollerTest is Test {
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));
         autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
+        OldPeripheryLike periphery = OldPeripheryLike(AddressBook.PERIPHERY_1_4_0);
         yt.approve(address(periphery), type(uint256).max);
         periphery.swapYTsForTarget(address(mockAdapter), autoRoller.maturity(), ytBal);
         aafter = target.balanceOf(address(this));
@@ -789,40 +795,60 @@ contract AutoRollerTest is Test {
     // Roller Periphery
 
     function testRollerPeripheryDepositRedeem() public {
-        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        RollerPeriphery rollerPeriphery = new RollerPeriphery(permit2, address(0));
         rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
 
         autoRoller.roll();
 
-        target.approve(address(rollerPeriphery), 1.1e18);
+        target.mint(alice, 1.1e18);
+
+        vm.startPrank(alice);
+
+        // Approve PERMIT2 to spend alice's target
+        target.approve(address(permit2), 1.1e18);
 
         uint256 previewedShares = autoRoller.previewDeposit(1.1e18);
-        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+        uint256 shareBalPre = autoRoller.balanceOf(alice);
+
+        // Generate permit for the periphery to spend alice's target
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(target));
+
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the sellToken being target
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(target), address(0));
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
-        rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), previewedShares + 1);
+        rollerPeriphery.deposit(autoRoller, 1.1e18, alice, previewedShares + 1, data, quote);
 
-        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), previewedShares);
+        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, alice, previewedShares, data, quote);
 
-        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+        uint256 shareBalPost = autoRoller.balanceOf(alice);
 
         assertEq(previewedShares, receivedShares);
         assertEq(receivedShares, shareBalPost - shareBalPre);
 
-        uint256 assetBalPre = target.balanceOf(address(this));
-
-        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+        uint256 assetBalPre = target.balanceOf(alice);
+        
+        // Approve PERMIT2 to spend alice's shares
+        autoRoller.approve(address(permit2), shareBalPost);
 
         uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
 
+        // Generate permit for the periphery to spend alice's shares
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the buyToken being target
+        quote = _getQuote(address(0), address(target));
+
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetError.selector));
-        rollerPeriphery.redeem(autoRoller, shareBalPost, address(this), previewedAssets + 1);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAmountOutError.selector));
+        rollerPeriphery.redeem(autoRoller, shareBalPost, alice, previewedAssets + 1, data, quote);
 
-        uint256 receivedAssets = rollerPeriphery.redeem(autoRoller, shareBalPost, address(this), previewedAssets);
+        uint256 receivedAssets = rollerPeriphery.redeem(autoRoller, shareBalPost, alice, previewedAssets, data, quote);
 
-        uint256 assetBalPost = target.balanceOf(address(this));
+        uint256 assetBalPost = target.balanceOf(alice);
 
         assertEq(previewedAssets, receivedAssets);
         assertEq(receivedAssets, assetBalPost - assetBalPre);
@@ -830,44 +856,65 @@ contract AutoRollerTest is Test {
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+
+        vm.stopPrank();
     }
 
     function testRollerPeripheryDepositRedeemUnderlying() public {
         autoRoller.roll();
 
-        underlying.mint(address(this), 1.1e18);
-        underlying.approve(address(rollerPeriphery), 1.1e18);
+        underlying.mint(alice, 1.1e18);
+
+        vm.startPrank(alice);
+
+        // Approve PERMIT2 to spend alice's shares
+        underlying.approve(address(permit2), 1.1e18);
 
         uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
 
         uint256 previewedShares = autoRoller.previewDeposit(targetValue);
-        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+        uint256 shareBalPre = autoRoller.balanceOf(alice);
+
+        // Generate permit for the periphery to spend alice's underlying
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(underlying));
+        
+        // Get quote for the periphery to swap underlying for target
+        // Note that this is an empty quote where only we are interested in the buyToken being target
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(underlying), address(0));
 
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinSharesError.selector));
-        rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares + 1);
+        rollerPeriphery.deposit(autoRoller, 1.1e18, alice, previewedShares + 1, data, quote);
 
-        uint256 receivedShares = rollerPeriphery.depositUnderlying(autoRoller, 1.1e18, address(this), previewedShares);
+        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, alice, previewedShares, data, quote);
 
-        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+        uint256 shareBalPost = autoRoller.balanceOf(alice);
 
         assertEq(previewedShares, receivedShares);
         assertEq(receivedShares, shareBalPost - shareBalPre);
 
-        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+        uint256 underlyingBalPre = underlying.balanceOf(alice);
 
-        autoRoller.approve(address(rollerPeriphery), shareBalPost);
+        // Approve PERMIT2 to spend alice's shares
+        autoRoller.approve(address(permit2), shareBalPost);
 
         uint256 previewedAssets = autoRoller.previewRedeem(shareBalPost);
         uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
 
+        // Generate permit for the periphery to spend alice's shares
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+
+        // Get quote for the periphery to swap target for underlying
+        // Note that this is an empty quote where only we are interested in the buyToken being underlying
+        quote = _getQuote(address(0), address(underlying));
+        
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinUnderlyingError.selector));
-        rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying + 1);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAmountOutError.selector));
+        rollerPeriphery.redeem(autoRoller, shareBalPost, alice, previewedUnderlying + 1, data, quote);
 
-        uint256 receivedUnderlying = rollerPeriphery.redeemForUnderlying(autoRoller, shareBalPost, address(this), previewedUnderlying);
+        uint256 receivedUnderlying = rollerPeriphery.redeem(autoRoller, shareBalPost, alice, previewedUnderlying, data, quote);
 
-        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+        uint256 underlyingBalPost = underlying.balanceOf(alice);
 
         assertEq(previewedUnderlying, receivedUnderlying);
         assertEq(receivedUnderlying, underlyingBalPost - underlyingBalPre);
@@ -876,43 +923,65 @@ contract AutoRollerTest is Test {
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
         assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
+
+        vm.stopPrank();
     }
 
     function testRollerPeripheryMintWithdraw() public {
-        RollerPeriphery rollerPeriphery = new RollerPeriphery();
-        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
+        target.mint(alice, 2e18);
 
+        RollerPeriphery rollerPeriphery = new RollerPeriphery(permit2, address(0));
+        rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
+    
         autoRoller.roll();
 
-        target.approve(address(rollerPeriphery), 1.1e18);
+        vm.startPrank(alice);
+
+        // Approve PERMIT2 to spend alice's shares
+        target.approve(address(permit2), 1.1e18);
 
         uint256 previewedAssets = autoRoller.previewMint(1.1e18);
-        uint256 assetBalPre = target.balanceOf(address(this));
+        uint256 assetBalPre = target.balanceOf(alice);
+
+        // Generate permit for the periphery to spend alice's target
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(target));
+
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the sellToken being target
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(target), address(0));
 
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAssetError.selector));
-        rollerPeriphery.mint(autoRoller, 1.1e18, address(this), previewedAssets - 1);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAmountError.selector));
+        rollerPeriphery.mint(autoRoller, 1.1e18, alice, 0, previewedAssets - 1, data, quote);
 
-        uint256 pulledAssets = rollerPeriphery.mint(autoRoller, 1.1e18, address(this), previewedAssets);
+        uint256 pulledAssets = rollerPeriphery.mint(autoRoller, 1.1e18, alice, 0, previewedAssets, data, quote);
 
-        uint256 assetBalPost = target.balanceOf(address(this));
+        uint256 assetBalPost = target.balanceOf(alice);
 
         assertEq(previewedAssets, pulledAssets);
         assertEq(pulledAssets, assetBalPre - assetBalPost);
 
-        uint256 shareBalPre = autoRoller.balanceOf(address(this));
+        uint256 shareBalPre = autoRoller.balanceOf(alice);
 
-        autoRoller.approve(address(rollerPeriphery), shareBalPre);
+        // Approve PERMIT2 to spend alice's shares
+        autoRoller.approve(address(permit2), shareBalPre);
 
         uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
 
+        // Generate permit for the periphery to spend alice's shares
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the buyToken being target
+        quote = _getQuote(address(0), address(target));
+
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
-        rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares - 1);
+        rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares - 1, data, quote);
 
-        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, address(this), previewedShares);
+        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares, data, quote);
 
-        uint256 shareBalPost = autoRoller.balanceOf(address(this));
+        uint256 shareBalPost = autoRoller.balanceOf(alice);
 
         assertEq(previewedShares, pulledShares);
         assertEq(pulledShares, shareBalPre - shareBalPost);
@@ -920,63 +989,117 @@ contract AutoRollerTest is Test {
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
+
+        vm.stopPrank();
     }
 
     function testRollerPeripheryMintWithdrawUnderlying() public {
         autoRoller.roll();
 
-        underlying.mint(address(this), 1.1e18);
-        underlying.approve(address(rollerPeriphery), 1.1e18);
+        underlying.mint(alice, 1.1e18);
+
+        vm.startPrank(alice);
+
+        // Approve PERMIT2 to spend alice's shares
+        underlying.approve(address(permit2), 1.1e18);
 
         uint256 targetValue = uint(1.1e18).divWadDown(mockAdapter.scale());
 
         uint256 previewedAssets = autoRoller.previewMint(0.9e18);
         uint256 previewedUnderlying = previewedAssets.mulWadDown(mockAdapter.scale());
 
-        uint256 underlyingBalPre = underlying.balanceOf(address(this));
+        uint256 underlyingBalPre = underlying.balanceOf(alice);
+
+        // Generate permit for the periphery to spend alice's underlying
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(underlying));
+
+        // Get quote for the periphery to swap underlying for target
+        // Note that this is an empty quote where only we are interested in the sellToken being underlying
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(underlying), address(0));
 
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxUnderlyingError.selector));
-        uint256 valIn = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying - 1);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAmountError.selector));
+        uint256 valIn = rollerPeriphery.mint(autoRoller, 0.9e18, alice, 0, previewedUnderlying - 1, data, quote);
 
-        uint256 pulledUnderlying = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, address(this), previewedUnderlying);
+        uint256 pulledUnderlying = rollerPeriphery.mint(autoRoller, 0.9e18, alice, 0, previewedUnderlying, data, quote);
         uint256 pulledAssets = pulledUnderlying.divWadDown(mockAdapter.scale());
 
-        uint256 underlyingBalPost = underlying.balanceOf(address(this));
+        uint256 underlyingBalPost = underlying.balanceOf(alice);
 
         assertApproxEqAbs(previewedUnderlying, pulledUnderlying, 1);
         assertApproxEqAbs(pulledUnderlying, underlyingBalPre - underlyingBalPost, 1);
+
+        uint256 shareBalPre = autoRoller.balanceOf(alice);
+
+        // Approve PERMIT2 to spend alice's shares
+        autoRoller.approve(address(permit2), shareBalPre);
+
+        uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
+
+        // Generate permit for the periphery to spend alice's shares
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the buyToken being target
+        quote = _getQuote(address(0), address(underlying));
+
+        // Slippage check should fail if it's below what's previewed
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
+        rollerPeriphery.withdraw(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares - 1, data, quote);
+
+        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares, data, quote);
+
+        uint256 shareBalPost = autoRoller.balanceOf(alice);
+
+        assertEq(previewedShares, pulledShares);
+        assertEq(pulledShares, shareBalPre - shareBalPost);
 
         // No asset or share left in the periphery
         assertEq(autoRoller.balanceOf(address(rollerPeriphery)), 0);
         assertEq(ERC20(autoRoller.asset()).balanceOf(address(rollerPeriphery)), 0);
         assertEq(underlying.balanceOf(address(rollerPeriphery)), 0);
+
+        vm.stopPrank();
     }
 
     function testRollerPeripheryEject() public {
-        RollerPeriphery rollerPeriphery = new RollerPeriphery();
+        RollerPeriphery rollerPeriphery = new RollerPeriphery(permit2, address(0));
         rollerPeriphery.approve(ERC20(address(target)), address(autoRoller));
 
         autoRoller.roll();
 
-        target.approve(address(rollerPeriphery), 1.1e18);
+        vm.startPrank(alice);
 
-        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, address(this), 0);
+        target.mint(alice, 1.1e18);
+
+        // Approve PERMIT2 to spend alice's target
+        target.approve(address(permit2), 1.1e18);
+
+        // Generate permit for the periphery to spend alice's target
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(target));
+
+        // Get quote for the periphery to swap target for target
+        // Note that this is an empty quote where only we are interested in the sellToken being target
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(target), address(0));
+
+        uint256 receivedShares = rollerPeriphery.deposit(autoRoller, 1.1e18, alice, 0, data, quote);
 
         autoRoller.approve(address(rollerPeriphery), receivedShares);
 
         uint256 assets; uint256 excessBal; bool isExcessPTs;
         uint256 id = vm.snapshot();
-        (assets, excessBal, isExcessPTs) = rollerPeriphery.eject(autoRoller, receivedShares, address(this), 0, 0);
+        (assets, excessBal, isExcessPTs) = rollerPeriphery.eject(autoRoller, receivedShares, alice, 0, 0);
         vm.revertTo(id);
         
         // Min expected check should fail if it's below what's previewed, for assets or excess
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
-        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets + 1, excessBal);
+        rollerPeriphery.eject(autoRoller, receivedShares, alice, assets + 1, excessBal);
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MinAssetsOrExcessError.selector));
-        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets, excessBal + 1);
+        rollerPeriphery.eject(autoRoller, receivedShares, alice, assets, excessBal + 1);
 
-        rollerPeriphery.eject(autoRoller, receivedShares, address(this), assets, excessBal);
+        rollerPeriphery.eject(autoRoller, receivedShares, alice, assets, excessBal);
+
+        vm.stopPrank();
     }
 
     function testExternalSettlement() public {
@@ -1003,6 +1126,7 @@ contract AutoRollerTest is Test {
         autoRoller.startCooldown();
         assertEq(space.balanceOf(address(autoRoller)), 0);
     }
+
 
     function testTargetedRate() public {
         autoRoller.setParam("TARGET_DURATION", 6);
@@ -1118,6 +1242,14 @@ contract AutoRollerTest is Test {
         });
 
         balancerVault.swap(request, funds, 0, type(uint256).max);
+    }
+
+    function _getQuote(address fromToken, address toToken) public returns (RollerPeriphery.SwapQuote memory quote) {
+        if (fromToken == address(0)) {
+            quote.buyToken = ERC20(toToken);
+        } else {
+            quote.sellToken = ERC20(fromToken);
+        }
     }
 }
 
