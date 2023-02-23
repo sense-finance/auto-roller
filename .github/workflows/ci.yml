@@ -25,6 +25,8 @@ jobs:
 
       - name: Run forge tests
         run: forge test
+        env:
+          RPC_URL_MAINNET: ${{ secrets.RPC_URL_MAINNET }} 
 
       - name: Check code coverage
         run: forge coverage --report lcov
