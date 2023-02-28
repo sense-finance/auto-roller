@@ -971,15 +971,11 @@ contract AutoRollerTest is Test, Permit2Helper {
         // Generate permit for the periphery to spend alice's shares
         data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
 
-        // Get quote for the periphery to swap target for target
-        // Note that this is an empty quote where only we are interested in the buyToken being target
-        quote = _getQuote(address(0), address(target));
-
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
-        rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares - 1, data, quote);
+        rollerPeriphery.withdrawTarget(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares - 1, data);
 
-        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares, data, quote);
+        uint256 pulledShares = rollerPeriphery.withdrawTarget(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares, data);
 
         uint256 shareBalPost = autoRoller.balanceOf(alice);
 
@@ -1039,15 +1035,11 @@ contract AutoRollerTest is Test, Permit2Helper {
         // Generate permit for the periphery to spend alice's shares
         data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
 
-        // Get quote for the periphery to swap target for target
-        // Note that this is an empty quote where only we are interested in the buyToken being target
-        quote = _getQuote(address(0), address(underlying));
-
         // Slippage check should fail if it's below what's previewed
         vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxSharesError.selector));
-        rollerPeriphery.withdraw(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares - 1, data, quote);
+        rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares - 1, data);
 
-        uint256 pulledShares = rollerPeriphery.withdraw(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares, data, quote);
+        uint256 pulledShares = rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares, data);
 
         uint256 shareBalPost = autoRoller.balanceOf(alice);
 
