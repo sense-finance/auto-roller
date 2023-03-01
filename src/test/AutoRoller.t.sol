@@ -946,15 +946,11 @@ contract AutoRollerTest is Test, Permit2Helper {
         // Generate permit for the periphery to spend alice's target
         RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(target));
 
-        // Get quote for the periphery to swap target for target
-        // Note that this is an empty quote where only we are interested in the sellToken being target
-        RollerPeriphery.SwapQuote memory quote = _getQuote(address(target), address(0));
-
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAmountError.selector));
-        rollerPeriphery.mint(autoRoller, 1.1e18, alice, 0, previewedAssets - 1, data, quote);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAssetError.selector));
+        rollerPeriphery.mintFromTarget(autoRoller, 1.1e18, alice, previewedAssets - 1, data);
 
-        uint256 pulledAssets = rollerPeriphery.mint(autoRoller, 1.1e18, alice, 0, previewedAssets, data, quote);
+        uint256 pulledAssets = rollerPeriphery.mintFromTarget(autoRoller, 1.1e18, alice, previewedAssets, data);
 
         uint256 assetBalPost = target.balanceOf(alice);
 
@@ -968,7 +964,6 @@ contract AutoRollerTest is Test, Permit2Helper {
 
         uint256 previewedShares = autoRoller.previewWithdraw(pulledAssets * 0.99e18 / 1e18);
 
-        // Generate permit for the periphery to spend alice's shares
         data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
 
         // Slippage check should fail if it's below what's previewed
@@ -976,7 +971,6 @@ contract AutoRollerTest is Test, Permit2Helper {
         rollerPeriphery.withdrawTarget(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares - 1, data);
 
         uint256 pulledShares = rollerPeriphery.withdrawTarget(autoRoller, pulledAssets * 0.99e18 / 1e18, alice, previewedShares, data);
-
         uint256 shareBalPost = autoRoller.balanceOf(alice);
 
         assertEq(previewedShares, pulledShares);
@@ -1009,15 +1003,11 @@ contract AutoRollerTest is Test, Permit2Helper {
         // Generate permit for the periphery to spend alice's underlying
         RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(underlying));
 
-        // Get quote for the periphery to swap underlying for target
-        // Note that this is an empty quote where only we are interested in the sellToken being underlying
-        RollerPeriphery.SwapQuote memory quote = _getQuote(address(underlying), address(0));
-
         // Slippage check should fail if it's below what's previewed
-        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxAmountError.selector));
-        uint256 valIn = rollerPeriphery.mint(autoRoller, 0.9e18, alice, 0, previewedUnderlying - 1, data, quote);
+        vm.expectRevert(abi.encodeWithSelector(RollerPeriphery.MaxUnderlyingError.selector));
+        uint256 valIn = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, alice, previewedUnderlying - 1, data);
 
-        uint256 pulledUnderlying = rollerPeriphery.mint(autoRoller, 0.9e18, alice, 0, previewedUnderlying, data, quote);
+        uint256 pulledUnderlying = rollerPeriphery.mintFromUnderlying(autoRoller, 0.9e18, alice, previewedUnderlying, data);
         uint256 pulledAssets = pulledUnderlying.divWadDown(mockAdapter.scale());
 
         uint256 underlyingBalPost = underlying.balanceOf(alice);
@@ -1040,7 +1030,6 @@ contract AutoRollerTest is Test, Permit2Helper {
         rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares - 1, data);
 
         uint256 pulledShares = rollerPeriphery.withdrawUnderlying(autoRoller, pulledUnderlying * 0.99e18 / 1e18, alice, previewedShares, data);
-
         uint256 shareBalPost = autoRoller.balanceOf(alice);
 
         assertEq(previewedShares, pulledShares);

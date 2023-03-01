@@ -58,7 +58,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
     function setUp() public {
         vm.selectFork(mainnetFork);
-        vm.rollFork(16728356);
+        vm.rollFork(16734061);
 
         utils = new RollerUtils(address(divider));
         rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2),AddressBook.EXCHANGE_PROXY);
@@ -129,55 +129,18 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         autoRoller.roll();
     }
 
+    //// TEST WITHDRAW ////
+    function testMainnetWithdrawFromUnderlying() public {}
+    
+    function testMainnetWithdrawFromTarget() public {}
+
     //// TEST REDEEM ////
 
+    function testMainnetRedeemFromUnderlying() public {}
+
+    function testMainnetRedeemFromTarget() public {}
+
     //// TEST MINT ////
-
-    function testMainnetMintFromUSDC() public {
-        vm.startPrank(alice);
-
-        uint256 usdcBalBefore = ERC20(AddressBook.USDC).balanceOf(alice);
-        
-        // Off-chain, calculate how many tokens (USDC) I need to mint 1 share:
-        // (1) calculate how many assets (maDAI) I need to mint 1 share
-        // (2) convert asset (maDAI) to underlying (DAI)
-        // (3) calculate maDAI to USDC using 0xAPI (which is 1002645)
-        uint256 assetsIn = autoRoller.previewMint(1e18);
-        uint256 underlyingIn = assetsIn.mulWadDown(adapter.scale()); // This is: 
-        uint256 tokenIn = 1002645; // Use amount from (3)
-
-        // Load alice's wallet, pertmi2 approval, generate permit message and quote to swap USDC to underlying (DAI) 
-        deal(AddressBook.USDC, alice, 100e6);
-        ERC20(AddressBook.USDC).approve(AddressBook.PERMIT2, type(uint256).max);
-        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), AddressBook.USDC);
-        RollerPeriphery.SwapQuote memory quote = _getQuote(address(adapter), AddressBook.USDC, address(0), tokenIn);
-        uint256 shares = rollerPeriphery.mint(autoRoller, 1e18, alice, 0, tokenIn, data, quote);
-
-        vm.stopPrank();
-    }
-
-    function testMainnetMintFromETH() public {
-        vm.startPrank(alice);
-
-        // Load alice's wallet, pertmi2 approval, generate permit message and quote to swap USDC to underlying (DAI) 
-        vm.deal(alice, 1e18);
-        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), rollerPeriphery.ETH());
-        RollerPeriphery.SwapQuote memory quote = _getQuote(address(adapter), rollerPeriphery.ETH(), address(0));
-
-        // Deposit
-        uint256 ethBalBefore = address(alice).balance;
-        
-        uint256 oneETHtoUnderlying = 1622131431243789710912; // 1 ETH to DAI at the current block and the given quote (see _getQuote)
-        uint256 underlyingToTarget = ERC4626(adapter.target()).previewDeposit(oneETHtoUnderlying); // 1 underlying (DAI) to asset (target) maDAI
-        uint256 previewShares = autoRoller.previewDeposit(underlyingToTarget);
-        uint256 shares = rollerPeriphery.deposit{value: 1 ether}(autoRoller, 1e18, alice, 0, data, quote);
-        uint256 ethBalAfter = address(alice).balance;
-        assertEq(ethBalBefore - ethBalAfter, 1e18);
-        // assertEq(previewShares, shares); // TODO: why is this failing?
-        assertEq(shares, autoRoller.balanceOf(alice));
-
-        vm.stopPrank();
-    }
 
     function testMainnetMintFromUnderlying() public {
         vm.startPrank(alice);
@@ -225,7 +188,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
     //// TEST DEPOSIT ////
 
-    function testMainnetDepositFromUSDC() public {
+    function testMainnetDepositFromUSDCRedeemToUSDC() public {
         vm.startPrank(alice);
 
         // Load alice's wallet, pertmi2 approval, generate permit message and quote to swap USDC to underlying (DAI) 
@@ -236,8 +199,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
         // Deposit
         uint256 usdcBalBefore = ERC20(AddressBook.USDC).balanceOf(alice);
-        
-        uint256 oneUSDCtoUnderlying = 997549297608279900; // 1 USDC to DAI at the current block and the given quote (see _getQuote)
+        uint256 oneUSDCtoUnderlying = 996655325605252700; // 1 USDC to DAI at the rolled block and the given quote (see _getQuote)
         uint256 underlyingToTarget = ERC4626(adapter.target()).previewDeposit(oneUSDCtoUnderlying); // 1 underlying (DAI) to asset (target) maDAI
         uint256 previewShares = autoRoller.previewDeposit(underlyingToTarget);
         uint256 shares = rollerPeriphery.deposit(autoRoller, 1e6, alice, 0, data, quote);
@@ -246,10 +208,26 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         // assertEq(previewShares, shares); // TODO: why is this failing?
         assertEq(shares, autoRoller.balanceOf(alice));
 
+        // Redeem
+        ERC20(address(autoRoller)).approve(AddressBook.PERMIT2, shares);
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        // Amount of shares converted to target (maDAI) converted to underlying (DAI)
+        // that are being sold for USDC
+        {
+            uint256 underlyingToSell = 996655325595199885; 
+            quote = _getQuote(address(adapter), address(0), AddressBook.USDC, underlyingToSell);
+        }
+        uint256 usdc = rollerPeriphery.redeem(autoRoller, shares, alice, 0, data, quote);
+        uint256 sharesBalAfter = autoRoller.balanceOf(alice);
+        assertEq(shares - sharesBalAfter, shares);
+        uint256 underlyingToUSDC = 997297; // `underlyingToSell` DAI to USDC at the rolled block and the given quote (see _getQuote)
+        assertEq(underlyingToUSDC, usdc);
+        assertEq(usdc, ERC20(AddressBook.USDC).balanceOf(alice));
+
         vm.stopPrank();
     }
 
-    function testMainnetDepositFromETH() public {
+    function testMainnetDepositFromETHRedeemToETH() public {
         vm.startPrank(alice);
 
         // Load alice's wallet, pertmi2 approval, generate permit message and quote to swap USDC to underlying (DAI) 
@@ -268,6 +246,22 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         assertEq(ethBalBefore - ethBalAfter, 1e18);
         // assertEq(previewShares, shares); // TODO: why is this failing?
         assertEq(shares, autoRoller.balanceOf(alice));
+
+        // Redeem
+        ERC20(address(autoRoller)).approve(AddressBook.PERMIT2, shares);
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        // Amount of shares converted to target (maDAI) converted to underlying (DAI)
+        // that are being sold for ETH
+        {
+            uint256 underlyingToSell = 996672055577733082; 
+            quote = _getQuote(address(adapter), address(0), rollerPeriphery.ETH(), underlyingToSell);
+        }
+        uint256 eth = rollerPeriphery.redeem(autoRoller, shares, alice, 0, data, quote);
+        uint256 sharesBalAfter = autoRoller.balanceOf(alice);
+        assertEq(shares - sharesBalAfter, shares);
+        uint256 underlyingToETH = 601860546139823; // `underlyingToSell` DAI to ETH at the rolled block and the given quote (see _getQuote)
+        assertEq(underlyingToETH, eth);
+        assertEq(eth, address(alice).balance);
 
         vm.stopPrank();
     }
@@ -321,7 +315,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         address fromToken,
         address toToken
     ) public returns (RollerPeriphery.SwapQuote memory quote) {
-        return _quote(adapter, fromToken, toToken, 0);
+       return  _quote(adapter, fromToken, toToken, 0);
     }
 
     function _getQuote(
@@ -330,7 +324,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         address toToken,
         uint256 amt
     ) public returns (RollerPeriphery.SwapQuote memory quote) {
-       return  _quote(adapter, fromToken, toToken, amt);
+        return _quote(adapter, fromToken, toToken, amt);
     }
 
     function _quote(
@@ -357,28 +351,37 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
                 quote.buyToken = ERC20(toToken);
                 quote.spender = AddressBook.EXCHANGE_PROXY; // from 0x API
                 quote.swapTarget = payable(AddressBook.EXCHANGE_PROXY); // from 0x API
-                if (address(quote.buyToken) == AddressBook.DAI) {
-                    // DAI to USDC quote
-                    // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=USDC&sellAmount=1000000000000000000
-                    // buyAmount = 997445
-                    quote
-                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000000000000f113f000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000a3e3384f2d63fe43e4";
-                }
 
-                if (address(quote.buyToken) == AddressBook.DAI && amt == 1005228967528524008) {
-                    // DAI to USDC quote
-                    // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=USDC&sellAmount=1005228967528524008
-                    // buyAmount = 997445
-                    quote
-                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000df34a6b877868e800000000000000000000000000000000000000000000000000000000000f256a000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000ac8a27314663fe43e5";
-                }
-                
                 if (address(quote.buyToken) == rollerPeriphery.ETH()) {
                     // DAI to ETH quote
                     // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=ETH&sellAmount=1000000000000000000
-                    // buyAmount = 612818454809147
+                    // buyAmount = 603870192313109
                     quote
-                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000002231c1d5535b4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000da4c4982a163fe43e7";
+                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000021fb97d9ec7d9000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000e7e38e4d8563ff52a0";
+                }
+
+                if (address(quote.buyToken) == rollerPeriphery.ETH() && amt == 996672055577733082) {
+                    // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=ETH&sellAmount=996672055577733082
+                    // DAI to ETH quote
+                    // buyAmount = 601860546139823
+                    quote
+                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000dd4e3f43644e7da00000000000000000000000000000000000000000000000000021dea43376718000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee869584cd0000000000000000000000001000000000000000000000000000000000000011000000000000000000000000000000000000000000000018561b4e6a63ff52a2";
+                }
+
+                if (address(quote.buyToken) == AddressBook.USDC) {
+                    // DAI to USDC quote
+                    // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=USDC&sellAmount=1000000000000000000
+                    // buyAmount = 1000644
+                    quote
+                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000000000000f1dad000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000b3cf6ec3b563ff52a3";
+                }
+
+                if (address(quote.buyToken) == AddressBook.USDC && amt == 996655325595199885) {
+                    // https://api.0x.org/swap/v1/quote?sellToken=DAI&buyToken=USDC&sellAmount=996655325595199885
+                    // DAI to USDC quote
+                    // buyAmount = 997297
+                    quote
+                        .swapCallData = hex"d9627aa400000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000dd4d4bcf59a698d00000000000000000000000000000000000000000000000000000000000f10bc000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000006b175474e89094c44da98b954eedeac495271d0f000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000ff8f926fef63ff550b";
                 }
             }
         } else {
@@ -396,25 +399,17 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
                 if (address(quote.sellToken) == AddressBook.USDC) {
                     // USDC to DAI quote
                     // https://api.0x.org/swap/v1/quote?sellToken=USDC&buyToken=DAI&sellAmount=1000000
-                    // buyAmount = 997549297608279900
+                    // buyAmount = 996655325605252700
                     quote
-                        .swapCallData = hex"d9627aa4000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000f42400000000000000000000000000000000000000000000000000db7c622811ca0e600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000006b175474e89094c44da98b954eedeac495271d0f869584cd000000000000000000000000100000000000000000000000000000000000001100000000000000000000000000000000000000000000006c8599c8c663fe43e8";
+                        .swapCallData = hex"d9627aa4000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000f42400000000000000000000000000000000000000000000000000db16c35f3bd872d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000006b175474e89094c44da98b954eedeac495271d0f869584cd000000000000000000000000100000000000000000000000000000000000001100000000000000000000000000000000000000000000005f5fce41f163ff52a7";
                 }
 
-                if (address(quote.sellToken) == AddressBook.USDC && amt == 1002645) {
-                    // USDC to DAI quote
-                    // https://api.0x.org/swap/v1/quote?sellToken=USDC&buyToken=DAI&sellAmount=1002645
-                    // buyAmount = 997549297608279900
-                    quote
-                        .swapCallData = hex"d9627aa4000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000f4c950000000000000000000000000000000000000000000000000dc11006ebd0e95300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000006b175474e89094c44da98b954eedeac495271d0f869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000ef2846de6563fe43ea";
-                }
-                
                 if (address(quote.sellToken) == rollerPeriphery.ETH()) {
                     // https://api.0x.org/swap/v1/quote?sellToken=ETH&buyToken=DAI&sellAmount=1000000000000000000
                     // ETH to DAI quote
-                    // buyAmount = 1622131431243789600000
+                    // buyAmount = 1650495170502899000000
                     quote
-                        .swapCallData = hex"3598d8ab0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000058426ec8e9063ff6aa0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002bc02aaa39b223fe8d0a0e5c4f27ead9083c756cc20001f46b175474e89094c44da98b954eedeac495271d0f000000000000000000000000000000000000000000869584cd00000000000000000000000010000000000000000000000000000000000000110000000000000000000000000000000000000000000000e39c28ccb563fe43eb";
+                        .swapCallData = hex"3598d8ab0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000058942b66bed5d8ce900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002bc02aaa39b223fe8d0a0e5c4f27ead9083c756cc20001f46b175474e89094c44da98b954eedeac495271d0f000000000000000000000000000000000000000000869584cd0000000000000000000000001000000000000000000000000000000000000011000000000000000000000000000000000000000000000016e67315b463ff52a7";
                 }
             }
         }

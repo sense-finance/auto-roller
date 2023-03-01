@@ -55,14 +55,20 @@ contract RollerPeriphery is Trust {
 
     /* ========== ERRORS ========== */
 
-    /// @notice thrown when amount out received is below the min set by caller.
-    error MinAmountOutError();
+    /// @notice thrown when amount of assets received is below the min set by caller.
+    error MinAssetError();
+
+    /// @notice thrown when amount of underlying received is below the min set by caller.
+    error MinUnderlyingError();
 
     /// @notice thrown when amount of shares received is below the min set by caller.
     error MinSharesError();
 
-    /// @notice thrown when amount received is above the max set by caller.
-    error MaxAmountError();
+    /// @notice thrown when amount of assets received is above the max set by caller.
+    error MaxAssetError();
+
+    /// @notice thrown when amount of underlying received is above the max set by caller.
+    error MaxUnderlyingError();
 
     /// @notice thrown when amount of shares received is above the max set by caller.
     error MaxSharesError();
@@ -70,8 +76,16 @@ contract RollerPeriphery is Trust {
     /// @notice thrown when amount of assets or excess received is below the max set by caller.
     error MinAssetsOrExcessError();
 
+    /// @notice thrown when amount out received is below the min set by caller.
+    error MinAmountOutError();
+
+    /// @notice thrown when swap on 0x returns false.
     error ZeroExSwapFailed(bytes res);
+
+    /// @notice thrown when swap on 0x succeeds but either the sellAmount or they buyAmount are zero.
     error ZeroSwapAmt();
+
+    /// @notice thrown if swapTarget is not the exchange proxy.
     error InvalidExchangeProxy();
 
     constructor(IPermit2 _permit2, address _exchangeProxy) Trust(msg.sender) {
@@ -100,8 +114,6 @@ contract RollerPeriphery is Trust {
         _transferUnderlying(roller, receiver);
     }
 
-    
-
     /// @notice Withdraw asset from vault with slippage protection
     /// @param roller AutoRoller vault
     /// @param assets Amount of asset requested for withdrawal
@@ -110,11 +122,9 @@ contract RollerPeriphery is Trust {
     /// @param permit Permit message to pull shares from caller
     /// @return shares Number of shares to redeem
     function withdrawTarget(AutoRoller roller, uint256 assets, address receiver, uint256 maxSharesOut, PermitData calldata permit) external returns (uint256 shares) {
-        uint256 shares = roller.previewWithdraw(assets);
+        _transferFrom(permit, address(roller), roller.previewWithdraw(assets));
         
-        _transferFrom(permit, address(roller), shares);
-        
-        if ((shares = roller.withdraw(assets, address(this), receiver)) > maxSharesOut) {
+        if ((shares = roller.withdraw(assets, receiver, address(this))) > maxSharesOut) {
             revert MaxSharesError();
         }
     }
@@ -132,9 +142,7 @@ contract RollerPeriphery is Trust {
         // asset converted from underlying (round down)
         uint256 assetOut = underlyingOut.divWadDown(adapter.scale());
 
-        uint256 shares = roller.previewWithdraw(assetOut);
-
-        _transferFrom(permit, address(roller), shares);
+        _transferFrom(permit, address(roller), roller.previewWithdraw(assetOut));
 
         if ((shares = roller.withdraw(assetOut, address(this), address(this))) > maxSharesOut) {
             revert MaxSharesError();
@@ -144,44 +152,37 @@ contract RollerPeriphery is Trust {
         ERC20(adapter.underlying()).safeTransfer(receiver, underlyingOut);
     }
 
-    /// @notice Convert any token to asset and mint vault shares with slippage protection
+    /// @notice Mint vault shares with slippage protection
     /// @param roller AutoRoller vault
     /// @param shares Number of shares to mint
     /// @param receiver Destination address for the returned shares
-    /// @param minAccepted Min asset amount accepted from swapping token to asset // TODO: check if needed
-    /// @param tokenAmt Amount of tokens to be pulled from msg.sender (set to 0 if mint from Underlying or Target) // TODO: check
-    /// @param permit Permit message to pull token from caller
-    /// @param quote Swap quote for converting token to underlying
-    /// @return tokenIn Amount of tokens pulled from msg.sender and used to mint vault shares
-    function mint(AutoRoller roller, uint256 shares, address receiver, uint256 minAccepted, uint256 tokenAmt, PermitData calldata permit, SwapQuote calldata quote) external payable returns (uint256 tokenIn) {
+    /// @param maxAmountIn Maximum amount of assets pulled from msg.sender
+    /// @return assets Amount of asset pulled from msg.sender and used to mint vault shares
+    function mintFromTarget(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn, PermitData calldata permit) external returns (uint256 assets) {
+        _transferFrom(permit, address(roller.asset()), roller.previewMint(shares));
+
+        if ((assets = roller.mint(shares, receiver)) > maxAmountIn) {
+            revert MaxAssetError();
+        }
+    }
+
+    /// @notice Convert underlying to asset and mint vault shares with slippage protection
+    /// @param roller AutoRoller vault
+    /// @param shares Number of shares to mint
+    /// @param receiver Destination address for the returned shares
+    /// @param maxAmountIn Maximum amount of underlying pulled from msg.sender
+    /// @return underlyingIn Amount of underlying pulled from msg.sender and used to mint vault shares
+    function mintFromUnderlying(AutoRoller roller, uint256 shares, address receiver, uint256 maxAmountIn, PermitData calldata permit) external returns (uint256 underlyingIn) {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
-        uint256 tBal;
-        if (address(quote.sellToken) == adapter.underlying()) {
-            tokenIn = roller.previewMint(shares).mulWadUp(adapter.scale()); // underlying converted from asset (round up)
-        } else if (address(quote.sellToken) != address(adapter.target())) {
-            // TODO: here we would need to convert the amount of shares to token
-            // tokenIn is the price of token-underlying so then we can calculate the -to-asset by dividing for scale
-            // tokenIn = roller.previewMint(shares).mulWadUp(adapter.scale()).mulDivDown(10**quote.sellToken.decimals(), tokenAmt); // underlying converted from asset (round up)
-            // TODO: we have another option, which is the one used below, where we simply receive
-            // the amount of tokens we need directly
-            tokenIn = tokenAmt; // amount of tokens to pull from user
-        } else {
-            tokenIn = roller.previewMint(shares); // assets
+
+        _transferFrom(permit, adapter.underlying(), underlyingIn = roller.previewMint(shares).mulWadUp(adapter.scale()));
+
+        adapter.wrapUnderlying(underlyingIn); // convert underlying to asset
+
+        uint256 assetIn = roller.mint(shares, receiver);
+        if ((underlyingIn = assetIn.mulWadDown(adapter.scale())) > maxAmountIn) {
+            revert MaxUnderlyingError();
         }
-        if (address(quote.sellToken) != ETH) _transferFrom(permit, address(quote.sellToken), tokenIn);
-        
-        // TODO: is minAccepted really needed?
-        if (_toTarget(address(adapter), tokenIn, quote) <= minAccepted) revert MinAssetsOrExcessError();
-        
-        tokenIn = roller.mint(shares, receiver); // assets
-        if (address(quote.sellToken) == adapter.underlying()) {
-            tokenIn = tokenIn.mulWadDown(adapter.scale()); // underlying converted from asset (round up)
-        } else if (address(quote.sellToken) != address(adapter.target())) {
-            // TODO: should we just re-assign tokenIn to tokenAmt?
-            tokenIn = tokenAmt;
-        }
-        // TODO: in the case of we are minting from a token different than underlying or target
-        // the return value `tokenIn` would be the same as tokenAmt, does this make sense?
     }
 
     /// @notice Convert token to asset and deposit into vault with slippage protection
