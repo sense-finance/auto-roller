@@ -187,7 +187,7 @@ contract RollerPeriphery is Trust {
 
     /// @notice Convert token to asset and deposit into vault with slippage protection
     /// @param roller AutoRoller vault
-    /// @param tokenIn Amount of underlying pulled from msg.sender and used to mint vault shares
+    /// @param tokenIn Amount of token pulled from msg.sender and used to mint vault shares
     /// @param receiver Destination address for the returned shares
     /// @param minSharesOut Minimum amount of returned shares
     /// @param permit Permit message to pull token from caller
