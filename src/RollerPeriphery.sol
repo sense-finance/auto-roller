@@ -36,7 +36,7 @@ contract RollerPeriphery is Trust {
     IPermit2 public immutable permit2;
 
     // 0x ExchangeProxy address. See https://docs.0x.org/developer-resources/contract-addresses
-    address public immutable exchangeProxy; // TODO: do we want this to be mutable?
+    address public immutable exchangeProxy;
 
     /* ========== DATA STRUCTURES ========== */
 
@@ -97,7 +97,7 @@ contract RollerPeriphery is Trust {
     /// @param roller AutoRoller vault
     /// @param shares Number of shares to redeem
     /// @param receiver Destination address for the returned assets
-    /// @param minAmountOut Minimum amount of tokens returned // TODO: check
+    /// @param minAmountOut Minimum amount of tokens returned
     /// @param permit Permit message to pull shares from caller
     /// @param quote Swap quote for converting underlying to token
     /// @return amtOut Amount of tokens redeemed by the given number of shares
@@ -111,7 +111,7 @@ contract RollerPeriphery is Trust {
             ? payable(receiver).transfer(amtOut)
             : ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
 
-        _transferUnderlying(roller, receiver);
+        _transferRemainingUnderlying(roller, receiver);
     }
 
     /// @notice Withdraw asset from vault with slippage protection
@@ -280,6 +280,7 @@ contract RollerPeriphery is Trust {
 
     /// @notice Given an amount and a quote, decides whether it needs to unwrap and make a swap on 0x,
     /// simply unwrap tokens or do nothing
+    /// @dev when using zaps, the amount of underlying to swap for quote.buyToken (on 0x) is calculated off-chain
     function _fromTarget(
         address adapter,
         uint256 _amt,
@@ -288,10 +289,8 @@ contract RollerPeriphery is Trust {
         if (address(quote.buyToken) == AdapterLike(adapter).underlying()) {
             amt = AdapterLike(adapter).unwrapTarget(_amt);
         } else if (address(quote.buyToken) != AdapterLike(adapter).target()) {
-            // TODO:the issue here is that the quote needs to calculate off-chain the amount of underlying that will be received from the unwrapTarget
-            // and this underlying amount is what it is swapped on 0x. What happens if there's a mismatch? Maybe better to do the swap with target?
-            // sell tokens for underlying and wrap into target
             AdapterLike(adapter).unwrapTarget(_amt);
+            // sell underlying for quote.buyToken
             amt = _fillQuote(quote);
         } else {
             amt = _amt;
@@ -329,7 +328,7 @@ contract RollerPeriphery is Trust {
             );
     }
 
-    function _transferUnderlying(AutoRoller roller, address receiver) internal {
+    function _transferRemainingUnderlying(AutoRoller roller, address receiver) internal {
         // transfer any remaining underlying to receiver
         ERC20 underlying = ERC20(roller.adapter().underlying());
         uint256 remaining = underlying.balanceOf(address(this));
