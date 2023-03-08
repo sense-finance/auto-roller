@@ -31,6 +31,8 @@ jobs:
       - name: Check code coverage
         run: forge coverage --report lcov
         id: coverage
+        env:
+          RPC_URL_MAINNET: ${{ secrets.RPC_URL_MAINNET }}
 
       - uses: codecov/codecov-action@v3
         with:
