@@ -74,6 +74,8 @@ contract AutoRollerTest is Test, Permit2Helper {
     AutoRoller autoRoller;
 
     function setUp() public {
+        vm.warp(1678336715); // Wed Mar 08 2023 23:38:35 GMT-0500
+
         target     = new MockERC20("TestTarget", "TT0", 18);
         underlying = new MockERC20("TestUnderlying", "TU0", 18);
 
