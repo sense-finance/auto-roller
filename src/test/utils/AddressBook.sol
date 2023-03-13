@@ -9,9 +9,17 @@ library AddressBook {
     address public constant PERIPHERY_1_3_0 = 0xFff11417a58781D3C72083CB45EF54d79Cd02437;
     address public constant PERIPHERY_1_4_0 = 0xaa17633AA5A3Cb56698838561161bdb16Cebb8E3;
     address public constant SPACE_FACTORY_1_3_0 = 0x9e629751b3FE0b030C219e567156adCB70ad5541;
+    address public constant OWNABLE_ERC4626_FACTORY = 0x60cD94a921C651723AFcbA8030951F2EB3Ca572a;
+    address public constant EXCHANGE_PROXY = 0xDef1C0ded9bec7F1a1670819833240f027b25EfF;
+
+    // External
     address public constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
     address public constant USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
-    address public constant OWNABLE_ERC4626_FACTORY = 0x60cD94a921C651723AFcbA8030951F2EB3Ca572a;
+    address public constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+    address public constant MORPHO_DAI = 0x36F8d0D0573ae92326827C4a82Fe4CE4C244cAb6;
+    address public constant DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     // Goerli
     // address public constant SENSE_MULTISIG = 0x19f3bF5d7F8A58945DA80eaA4131DF2958f7AA4A;

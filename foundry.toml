@@ -19,3 +19,6 @@ remappings = [
     '@sense-finance/v1-core/=lib/sense-v1/pkg/core/src',
     'forge-std/=lib/forge-std/src',
 ]
+
+[rpc_endpoints]
+mainnet = "${RPC_URL_MAINNET}"
