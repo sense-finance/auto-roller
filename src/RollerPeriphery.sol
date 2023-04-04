@@ -111,7 +111,9 @@ contract RollerPeriphery is Trust {
             ? payable(receiver).transfer(amtOut)
             : ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
 
-        _transferRemainingUnderlying(roller, receiver);
+        // transfer any remaining underlying to receiver
+        ERC20 underlying = ERC20(roller.adapter().underlying());
+        _refundExcess(roller, underlying, receiver, underlying.balanceOf(address(this)));
     }
 
     /// @notice Withdraw asset from vault with slippage protection
@@ -201,6 +203,10 @@ contract RollerPeriphery is Trust {
         if ((shares = roller.deposit(toTarget, receiver)) < minSharesOut) {
             revert MinSharesError();
         }
+
+        // refund any remaining quote.sellToken to receiver
+        _refundExcess(roller, quote.sellToken, receiver, address(quote.sellToken) == ETH ? address(this).balance : quote.sellToken.balanceOf(address(this)));
+
     }
 
     /// @notice Quick exit into the constituent assets with slippage protection
@@ -328,11 +334,8 @@ contract RollerPeriphery is Trust {
             );
     }
 
-    function _transferRemainingUnderlying(AutoRoller roller, address receiver) internal {
-        // transfer any remaining underlying to receiver
-        ERC20 underlying = ERC20(roller.adapter().underlying());
-        uint256 remaining = underlying.balanceOf(address(this));
-        if (remaining > 0) underlying.safeTransfer(receiver, remaining);
+    function _refundExcess(AutoRoller roller, ERC20 token, address receiver, uint256 amt) internal {
+        if (amt > 0) address(token) == ETH ? payable(receiver).transfer(amt) : token.safeTransfer(receiver, amt);
     }
 
     // required for refunds
