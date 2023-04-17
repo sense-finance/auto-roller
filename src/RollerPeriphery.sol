@@ -88,6 +88,9 @@ contract RollerPeriphery is Trust {
     /// @notice thrown if swapTarget is not the exchange proxy.
     error InvalidExchangeProxy();
 
+    /// @notice thrown if swapTarget is not the exchange proxy.
+    error TransferFailed();
+
     constructor(IPermit2 _permit2, address _exchangeProxy) Trust(msg.sender) {
         permit2 = _permit2;
         exchangeProxy = _exchangeProxy;
@@ -107,9 +110,13 @@ contract RollerPeriphery is Trust {
         if ((amtOut = _fromTarget(roller, address(roller.adapter()), roller.redeem(shares, address(this), address(this)), receiver, quote)) < minAmountOut) {
             revert MinAmountOutError();
         }
-        address(quote.buyToken) == ETH
-            ? payable(receiver).transfer(amtOut)
-            : ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
+        // transfer bought tokens to receiver
+        if (address(quote.buyToken) == ETH) {
+            (bool sent, ) = receiver.call{ value: amtOut }("");
+            if (!sent) revert TransferFailed();
+        } else {
+            ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); 
+        }
     }
 
     /// @notice Withdraw asset from vault with slippage protection
@@ -335,7 +342,14 @@ contract RollerPeriphery is Trust {
     }
 
     function _refundExcess(AutoRoller roller, ERC20 token, address receiver, uint256 amt) internal {
-        if (amt > 0) address(token) == ETH ? payable(receiver).transfer(amt) : token.safeTransfer(receiver, amt);
+        if (amt > 0) {
+            if (address(token) == ETH) {
+                (bool sent, ) = receiver.call{ value: amt }("");
+                if (!sent) revert TransferFailed();
+            } else {
+                token.safeTransfer(receiver, amt);
+            }
+        }
     }
 
     // required for refunds
