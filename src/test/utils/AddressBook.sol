@@ -11,6 +11,7 @@ library AddressBook {
     address public constant SPACE_FACTORY_1_3_0 = 0x9e629751b3FE0b030C219e567156adCB70ad5541;
     address public constant OWNABLE_ERC4626_FACTORY = 0x60cD94a921C651723AFcbA8030951F2EB3Ca572a;
     address public constant EXCHANGE_PROXY = 0xDef1C0ded9bec7F1a1670819833240f027b25EfF;
+    address public constant RLV_FACTORY = 0x3B0f35bDD6Da9e3b8513c58Af8Fdf231f60232E5;
 
     // External
     address public constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
