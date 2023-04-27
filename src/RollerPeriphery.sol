@@ -88,6 +88,9 @@ contract RollerPeriphery is Trust {
     /// @notice thrown if swapTarget is not the exchange proxy.
     error InvalidExchangeProxy();
 
+    /// @notice thrown if swapTarget is not the exchange proxy.
+    error TransferFailed();
+
     constructor(IPermit2 _permit2, address _exchangeProxy) Trust(msg.sender) {
         permit2 = _permit2;
         exchangeProxy = _exchangeProxy;
@@ -104,14 +107,16 @@ contract RollerPeriphery is Trust {
     function redeem(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut, PermitData calldata permit, SwapQuote calldata quote) external payable returns (uint256 amtOut) {
         _transferFrom(permit, address(roller), shares);
 
-        if ((amtOut = _fromTarget(address(roller.adapter()), roller.redeem(shares, address(this), address(this)), quote)) < minAmountOut) {
+        if ((amtOut = _fromTarget(roller, address(roller.adapter()), roller.redeem(shares, address(this), address(this)), receiver, quote)) < minAmountOut) {
             revert MinAmountOutError();
         }
-        address(quote.buyToken) == ETH
-            ? payable(receiver).transfer(amtOut)
-            : ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
-
-        _transferRemainingUnderlying(roller, receiver);
+        // transfer bought tokens to receiver
+        if (address(quote.buyToken) == ETH) {
+            (bool sent, ) = receiver.call{ value: amtOut }("");
+            if (!sent) revert TransferFailed();
+        } else {
+            ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); 
+        }
     }
 
     /// @notice Withdraw asset from vault with slippage protection
@@ -197,7 +202,7 @@ contract RollerPeriphery is Trust {
         AdapterLike adapter = AdapterLike(address(roller.adapter()));
 
         if (address(quote.sellToken) != ETH) _transferFrom(permit, address(quote.sellToken), tokenIn);
-        uint256 toTarget = _toTarget(address(adapter), tokenIn, quote);
+        uint256 toTarget = _toTarget(roller, address(adapter), tokenIn, receiver, quote);
         if ((shares = roller.deposit(toTarget, receiver)) < minSharesOut) {
             revert MinSharesError();
         }
@@ -264,8 +269,10 @@ contract RollerPeriphery is Trust {
     /// @notice Given an amount and a quote, decides whether it needs to wrap and make a swap on 0x,
     /// simply wrap tokens or do nothing
     function _toTarget(
+        AutoRoller roller,
         address adapter,
         uint256 _amt,
+        address receiver,
         SwapQuote calldata quote
     ) internal returns (uint256 amt) {
         if (address(quote.sellToken) == AdapterLike(adapter).underlying()) {
@@ -273,6 +280,8 @@ contract RollerPeriphery is Trust {
         } else if (address(quote.sellToken) != AdapterLike(adapter).target()) {
             // sell tokens for underlying and wrap into target
             amt = AdapterLike(adapter).wrapUnderlying(_fillQuote(quote));
+            // refund any remaining quote.sellToken to receiver
+            _refundExcess(roller, quote.sellToken, receiver, address(quote.sellToken) == ETH ? address(this).balance : quote.sellToken.balanceOf(address(this)));
         } else {
             amt = _amt;
         }
@@ -282,8 +291,10 @@ contract RollerPeriphery is Trust {
     /// simply unwrap tokens or do nothing
     /// @dev when using zaps, the amount of underlying to swap for quote.buyToken (on 0x) is calculated off-chain
     function _fromTarget(
+        AutoRoller roller,
         address adapter,
         uint256 _amt,
+        address receiver,
         SwapQuote calldata quote
     ) internal returns (uint256 amt) {
         if (address(quote.buyToken) == AdapterLike(adapter).underlying()) {
@@ -292,6 +303,8 @@ contract RollerPeriphery is Trust {
             AdapterLike(adapter).unwrapTarget(_amt);
             // sell underlying for quote.buyToken
             amt = _fillQuote(quote);
+            // transfer any remaining underlying to receiver
+            _refundExcess(roller, quote.sellToken, receiver, quote.sellToken.balanceOf(address(this)));
         } else {
             amt = _amt;
         }
@@ -328,11 +341,15 @@ contract RollerPeriphery is Trust {
             );
     }
 
-    function _transferRemainingUnderlying(AutoRoller roller, address receiver) internal {
-        // transfer any remaining underlying to receiver
-        ERC20 underlying = ERC20(roller.adapter().underlying());
-        uint256 remaining = underlying.balanceOf(address(this));
-        if (remaining > 0) underlying.safeTransfer(receiver, remaining);
+    function _refundExcess(AutoRoller roller, ERC20 token, address receiver, uint256 amt) internal {
+        if (amt > 0) {
+            if (address(token) == ETH) {
+                (bool sent, ) = receiver.call{ value: amt }("");
+                if (!sent) revert TransferFailed();
+            } else {
+                token.safeTransfer(receiver, amt);
+            }
+        }
     }
 
     // required for refunds
