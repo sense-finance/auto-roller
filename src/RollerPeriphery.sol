@@ -88,6 +88,9 @@ contract RollerPeriphery is Trust {
     /// @notice thrown if swapTarget is not the exchange proxy.
     error InvalidExchangeProxy();
 
+    /// @notice thrown if ETH `call` returns false.
+    error TransferFailed();
+
     constructor(IPermit2 _permit2, address _exchangeProxy) Trust(msg.sender) {
         permit2 = _permit2;
         exchangeProxy = _exchangeProxy;
@@ -107,10 +110,12 @@ contract RollerPeriphery is Trust {
         if ((amtOut = _fromTarget(address(roller.adapter()), roller.redeem(shares, address(this), address(this)), quote)) < minAmountOut) {
             revert MinAmountOutError();
         }
-        address(quote.buyToken) == ETH
-            ? payable(receiver).transfer(amtOut)
-            : ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
-
+        if (address(quote.buyToken) == ETH) {
+            (bool sent, ) = receiver.call{ value: amtOut }("");
+            if (!sent) revert TransferFailed();
+        } else {
+            ERC20(address(quote.buyToken)).safeTransfer(receiver, amtOut); // transfer bought tokens to receiver
+        }
         _transferRemainingUnderlying(roller, receiver);
     }
 
@@ -254,10 +259,6 @@ contract RollerPeriphery is Trust {
             (address(quote.sellToken) == ETH ? address(this).balance : quote.sellToken.balanceOf(address(this)));
         if (boughtAmount == 0 || sellAmount == 0) revert ZeroSwapAmt();
 
-        // Refund any unspent protocol fees (paid in ether) to the sender.
-        uint256 refundAmt = address(this).balance;
-        if (address(quote.buyToken) == ETH) refundAmt = refundAmt - boughtAmount;
-        payable(msg.sender).transfer(refundAmt);
         emit BoughtTokens(address(quote.sellToken), address(quote.buyToken), sellAmount, boughtAmount);
     }
 
