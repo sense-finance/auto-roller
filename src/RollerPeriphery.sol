@@ -101,7 +101,7 @@ contract RollerPeriphery is Trust {
     /// @param permit Permit message to pull shares from caller
     /// @param quote Swap quote for converting underlying to token
     /// @return amtOut Amount of tokens redeemed by the given number of shares
-    function redeem(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut, PermitData calldata permit, SwapQuote calldata quote) external returns (uint256 amtOut) {
+    function redeem(AutoRoller roller, uint256 shares, address receiver, uint256 minAmountOut, PermitData calldata permit, SwapQuote calldata quote) external payable returns (uint256 amtOut) {
         _transferFrom(permit, address(roller), shares);
 
         if ((amtOut = _fromTarget(address(roller.adapter()), roller.redeem(shares, address(this), address(this)), quote)) < minAmountOut) {

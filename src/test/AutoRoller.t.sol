@@ -1083,6 +1083,17 @@ contract AutoRollerTest is Test, Permit2Helper {
         vm.stopPrank();
     }
 
+    function testRollerPeripheryCanReceiveETH() public {
+        // we make sure functions have the payable modifier, otherwise, this would not even compile
+        RollerPeriphery.PermitData memory data;
+        RollerPeriphery.SwapQuote memory quote;
+        
+        vm.expectRevert();
+        rollerPeriphery.redeem{ value: 1e18 }(autoRoller, 0, address(0), 0, data, quote);
+        vm.expectRevert();
+        rollerPeriphery.deposit{ value: 1e18 }(autoRoller, 0, address(0), 0, data, quote);
+    }
+
     function testExternalSettlement() public {
         autoRoller.roll();
 
