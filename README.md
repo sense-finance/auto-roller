@@ -112,6 +112,4 @@ TBD
 
 ## Security
 
-Sense Space contracts have gone through different independent security audits performed by [Fixed Point Solutions (Kurt Barry)](https://github.com/fixed-point-solutions). Reports are located in the [`audits`](./audits) directory.
-
-
+Sense Space contracts have gone through different independent security audits performed by [Fixed Point Solutions (Kurt Barry)](https://github.com/fixed-point-solutions) and [Sherlock](https://www.sherlock.xyz/). Reports are located in the [`audits`](./audits) directory.

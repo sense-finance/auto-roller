@@ -88,7 +88,7 @@ contract RollerPeriphery is Trust {
     /// @notice thrown if swapTarget is not the exchange proxy.
     error InvalidExchangeProxy();
 
-    /// @notice thrown if swapTarget is not the exchange proxy.
+    /// @notice thrown if ETH `call` returns false.
     error TransferFailed();
 
     constructor(IPermit2 _permit2, address _exchangeProxy) Trust(msg.sender) {
@@ -259,10 +259,6 @@ contract RollerPeriphery is Trust {
             (address(quote.sellToken) == ETH ? address(this).balance : quote.sellToken.balanceOf(address(this)));
         if (boughtAmount == 0 || sellAmount == 0) revert ZeroSwapAmt();
 
-        // Refund any unspent protocol fees (paid in ether) to the sender.
-        uint256 refundAmt = address(this).balance;
-        if (address(quote.buyToken) == ETH) refundAmt = refundAmt - boughtAmount;
-        payable(msg.sender).transfer(refundAmt);
         emit BoughtTokens(address(quote.sellToken), address(quote.buyToken), sellAmount, boughtAmount);
     }
 
