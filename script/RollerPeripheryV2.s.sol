@@ -50,7 +50,7 @@ contract MainnetDeploymentScript is Script {
         address deployer = vm.rememberKey(deployerPrivateKey);
         console.log("Deploying from:", deployer);
 
-        address senseMultisig = 0xDd76360C26Eaf63AFCF3a8d2c0121F13AE864D57;
+        address senseMultisig = AddressBook.SENSE_MULTISIG;
         console.log("Sense multisig is:", senseMultisig);
 
         // get contracts
@@ -74,6 +74,8 @@ contract MainnetDeploymentScript is Script {
 
         console.log("- Add AutoRoller factory as trusted on RollerPeriphery");
         rollerPeriphery.setIsTrusted(address(arFactory), true);
+
+        _doApprovals(rollerPeriphery);
 
         vm.stopBroadcast();
 
@@ -146,5 +148,42 @@ contract MainnetDeploymentScript is Script {
         // Roll into the first Series
         autoRoller.roll();
         console2.log("- Series successfully rolled!");
+    }
+
+    function _doApprovals(RollerPeriphery rollerPeriphery) internal {
+        // RLVs
+        address WSTETH_RLV = 0xeb9e7e1F892Bb2931e8C319D6F10FDf147090818;
+        address MAUSDC_RLV = 0x5A41f64eaf49d1582A289B197A4c5D64b2342aAe;
+        address MAUSDT_RLV = 0x321DfB34851E1663C91d07Cb5496e55A70aDE253;
+        address SANFRAX_EUR_WRAPPER_RLV = 0x419BC9B5c22A1800E6bFB94136a4b0e7c9F63d60;
+        address IDLE_USDC_JUNIOR_4626_RLV = 0x11f4a165f077186123b10444c14C01b68a770140;
+        address AURAWSTETH_RETH_SFRXETH_BPT_VAULT_WRAPPER_RLV = 0xCDCf0fa94217B0a5Bc7E6650A78c1302eCd5D067;
+
+        address[] memory rlvAddresses = new address[](6);
+        rlvAddresses[0] = WSTETH_RLV;
+        rlvAddresses[1] = MAUSDC_RLV;
+        rlvAddresses[2] = MAUSDT_RLV;
+        rlvAddresses[3] = SANFRAX_EUR_WRAPPER_RLV;
+        rlvAddresses[4] = IDLE_USDC_JUNIOR_4626_RLV;
+        rlvAddresses[5] = AURAWSTETH_RETH_SFRXETH_BPT_VAULT_WRAPPER_RLV;
+        
+        for (uint256 i = 0; i < 6; i++) {
+            AutoRoller rlv = AutoRoller(rlvAddresses[i]);
+            console2.log("- Making approvals for RLV %s", rlv.name());
+            OwnedAdapterLike adapter = rlv.adapter();
+            ERC20 target = ERC20(adapter.target());
+            ERC20 underlying = ERC20(adapter.underlying());
+
+            // Allow the new roller to move the roller periphery's target
+            rollerPeriphery.approve(target, address(rlv));
+
+            // Allow the adapter to move the roller periphery's underlying & target if it can't already
+            if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {
+                rollerPeriphery.approve(underlying, address(adapter));
+            }
+            if (target.allowance(address(rollerPeriphery), address(adapter)) == 0) {
+                rollerPeriphery.approve(target, address(adapter));
+            }
+        }
     }
 }
