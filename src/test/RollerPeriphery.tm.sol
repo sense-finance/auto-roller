@@ -43,7 +43,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
     BalancerVault balancerVault = BalancerVault(AddressBook.BALANCER_VAULT);
     SpaceFactoryLike spaceFactory = SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0);
-    Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
+    Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_1_4_0));
     Divider divider = Divider(spaceFactory.divider());
 
     ERC20 target = ERC20(AddressBook.MORPHO_DAI);
@@ -293,6 +293,82 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         assertEq(actualRedeem, previewedRedeem);
         assertEq(actualDeposit - sharesBalAfter, actualDeposit);
         assertEq(maDaiBalAfter - maDaiBalBefore, actualRedeem);
+
+        vm.stopPrank();
+    }
+
+    function testMainnetCanDepositFromTargetRedeemToTarget_BREAKING() public {
+        // wstETH RLV
+        address WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
+        autoRoller = AutoRoller(0xeb9e7e1F892Bb2931e8C319D6F10FDf147090818);
+
+        // deploy Periphery v2
+        Periphery periphery = new Periphery(
+            address(divider),
+            address(spaceFactory),
+            address(balancerVault),
+            address(AddressBook.PERMIT2),
+            address(AddressBook.EXCHANGE_PROXY)
+        );
+
+        // onboard wstETH adapter on Periphery
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        periphery.onboardAdapter(address(autoRoller.adapter()), false);
+
+        // verify wstETH adapter on Periphery
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        periphery.verifyAdapter(address(autoRoller.adapter()));
+
+        // set Periphery on divider
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        divider.setPeriphery(address(periphery));
+
+        // set Periphery on RLV
+        vm.prank(0x59A181710F926Eae6FddfbF27a14259E8DD00cA2); // deployer address
+        autoRoller.setParam("PERIPHERY", address(periphery));
+
+        // approve RLV to spend RollerPeriphery's wstETH from trusted address
+        rollerPeriphery.approve(ERC20(WSTETH), address(autoRoller));
+        // rollerPeriphery.approve(underlying, address(adapter));
+        // rollerPeriphery.approve(target, address(adapter));
+
+        // approve Periphery to pull RLV's YTs 
+        // FIXME: this should be done via a function on the autoRoller contract 
+        // UNCOMMENT THIS TO MAKE THE TEST PASS
+        // vm.prank(address(autoRoller));
+        // address YT = 0x98eA92eB1f51853a2Cf25dA655A2F6fb51E58675; // 1st July 2023 sY-wstETH
+        // ERC20(YT).approve(address(periphery), 0.1e18);
+
+        vm.startPrank(alice);
+
+        // Load alice's wallet, approve pertmi2, generate permit message and quote to swap USDC to underlying (DAI) 
+        deal(WSTETH, alice, 0.1e18);
+        ERC20(WSTETH).approve(AddressBook.PERMIT2, 0.1e18);
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), WSTETH);
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(adapter), WSTETH, address(0));
+
+        // Deposit
+        uint256 wstETHBalBefore = ERC20(WSTETH).balanceOf(alice);
+        uint256 previewedDeposit = autoRoller.previewDeposit(0.1e18);
+        uint256 actualDeposit = rollerPeriphery.deposit(autoRoller, 0.1e18, alice, 0, data, quote);
+        uint256 wstETHBalAfter = ERC20(WSTETH).balanceOf(alice);
+        // assertEq(wstETHBalBefore - wstETHBalAfter, 0.1e18);
+        // assertEq(previewedDeposit, actualDeposit);
+        // assertEq(actualDeposit, autoRoller.balanceOf(alice));
+
+        // Redeem
+        ERC20(address(autoRoller)).approve(AddressBook.PERMIT2, 0.05e18);
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        quote = _getQuote(address(adapter), address(0), WSTETH);
+        wstETHBalBefore = ERC20(WSTETH).balanceOf(alice);
+        uint256 previewedRedeem = autoRoller.previewRedeem(0.05e18);
+        uint256 actualRedeem = rollerPeriphery.redeem(autoRoller, 0.05e18, alice, 0, data, quote);
+       
+        // wstETHBalAfter = ERC20(WSTETH).balanceOf(alice);
+        // uint256 sharesBalAfter = autoRoller.balanceOf(alice);
+        // assertEq(actualRedeem, previewedRedeem);
+        // assertEq(0.05e18 - sharesBalAfter, 0.05e18);
+        // assertEq(wstETHBalAfter - wstETHBalBefore, actualRedeem);
 
         vm.stopPrank();
     }
