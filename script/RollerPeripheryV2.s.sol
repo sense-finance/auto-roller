@@ -70,12 +70,11 @@ contract MainnetDeploymentScript is Script {
 
         vm.startBroadcast(deployer); // deploy from deployer address
 
-        RollerPeriphery rollerPeriphery = RollerPeriphery(payable(0x8f66a9a5a4387092d34A4adC99f739819BE14869));
-        // RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2), AddressBook.EXCHANGE_PROXY);
+        RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2), AddressBook.EXCHANGE_PROXY);
         console2.log("- RollerPeriphery deployed @ ", address(rollerPeriphery));
 
-        // console.log("- Add AutoRoller factory as trusted on RollerPeriphery");
-        // rollerPeriphery.setIsTrusted(address(arFactory), true);
+        console.log("- Add AutoRoller factory as trusted on RollerPeriphery");
+        rollerPeriphery.setIsTrusted(address(arFactory), true);
 
         _doApprovals(rollerPeriphery);
 
@@ -178,24 +177,15 @@ contract MainnetDeploymentScript is Script {
 
             // Allow the new roller to move the roller periphery's target
             if (target.allowance(address(rollerPeriphery), address(rlv)) == 0) {
-                console2.log("- ENTRE");
                 rollerPeriphery.approve(target, address(rlv));
-            } else {
-                console2.log("- NO ENTRE");
             }
 
             // Allow the adapter to move the roller periphery's underlying & target if it can't already
             if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {
-                console2.log("- ENTRE1");
                 rollerPeriphery.approve(underlying, address(adapter));
-            } else {
-                console2.log("- NO ENTRE1");
             }
             if (target.allowance(address(rollerPeriphery), address(adapter)) == 0) {
-                console2.log("- ENTRE2");
                 rollerPeriphery.approve(target, address(adapter));
-            } else {
-                console2.log("- NO ENTRE2");
             }
         }
     }
