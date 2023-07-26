@@ -58,8 +58,9 @@ contract MainnetDeploymentScript is Script {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
+
         // TODO: replace for new periphery once its deployed
-        Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0); 
+        Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_1_4_0)); 
         Divider divider = Divider(spaceFactory.divider());
         AutoRollerFactory arFactory = AutoRollerFactory(AddressBook.RLV_FACTORY);
 
@@ -70,7 +71,7 @@ contract MainnetDeploymentScript is Script {
         vm.startBroadcast(deployer); // deploy from deployer address
 
         RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2), AddressBook.EXCHANGE_PROXY);
-        console2.log("- RollerPeriphery deployed @ ", address(arFactory));
+        console2.log("- RollerPeriphery deployed @ ", address(rollerPeriphery));
 
         console.log("- Add AutoRoller factory as trusted on RollerPeriphery");
         rollerPeriphery.setIsTrusted(address(arFactory), true);
@@ -175,7 +176,9 @@ contract MainnetDeploymentScript is Script {
             ERC20 underlying = ERC20(adapter.underlying());
 
             // Allow the new roller to move the roller periphery's target
-            rollerPeriphery.approve(target, address(rlv));
+            if (target.allowance(address(rollerPeriphery), address(rlv)) == 0) {
+                rollerPeriphery.approve(target, address(rlv));
+            }
 
             // Allow the adapter to move the roller periphery's underlying & target if it can't already
             if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {

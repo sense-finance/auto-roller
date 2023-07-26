@@ -43,7 +43,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
     BalancerVault balancerVault = BalancerVault(AddressBook.BALANCER_VAULT);
     SpaceFactoryLike spaceFactory = SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0);
-    Periphery periphery = Periphery(AddressBook.PERIPHERY_1_4_0);
+    Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_1_4_0));
     Divider divider = Divider(spaceFactory.divider());
 
     ERC20 target = ERC20(AddressBook.MORPHO_DAI);
@@ -295,6 +295,101 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
         assertEq(maDaiBalAfter - maDaiBalBefore, actualRedeem);
 
         vm.stopPrank();
+    }
+
+    function testMainnetCanDepositFromTargetRedeemToTargetAfterSwitchingPeriphery() public {
+        address WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
+        autoRoller = AutoRoller(0xeb9e7e1F892Bb2931e8C319D6F10FDf147090818); // wstETH RLV
+        adapter = OwnableERC4626Adapter(address(autoRoller.adapter()));
+        uint256 maturity = autoRoller.maturity(); // 1st July 2023
+        address YT = divider.yt(address(adapter), maturity);
+
+        // deploy Periphery v2
+        Periphery peripheryV2 = new Periphery(
+            address(divider),
+            address(spaceFactory),
+            address(balancerVault),
+            address(AddressBook.PERMIT2),
+            address(AddressBook.EXCHANGE_PROXY)
+        );
+
+        // onboard wstETH adapter on Periphery
+        peripheryV2.onboardAdapter(address(adapter), false);
+
+        // verify wstETH adapter on Periphery
+        peripheryV2.verifyAdapter(address(adapter));
+
+        // set Periphery on divider
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        divider.setPeriphery(address(peripheryV2));
+
+        // set Periphery on RLV
+        vm.prank(0x59A181710F926Eae6FddfbF27a14259E8DD00cA2); // deployer address
+        autoRoller.setParam("PERIPHERY", address(peripheryV2));
+
+        // approve RLV to spend RollerPeriphery's wstETH from trusted address
+        rollerPeriphery.approve(ERC20(WSTETH), address(autoRoller));
+
+        vm.startPrank(alice);
+
+        // Load alice's wallet, approve permit2, generate permit message and quote
+        deal(WSTETH, alice, 0.1e18);
+        ERC20(WSTETH).approve(AddressBook.PERMIT2, 0.1e18);
+        RollerPeriphery.PermitData memory data = _generatePermit(alicePrivKey, address(rollerPeriphery), WSTETH);
+        RollerPeriphery.SwapQuote memory quote = _getQuote(address(adapter), WSTETH, address(0));
+
+        // can deposit
+        rollerPeriphery.deposit(autoRoller, 0.1e18, alice, 0, data, quote);
+
+        // can't redeem because periphery has been switched
+        ERC20(address(autoRoller)).approve(AddressBook.PERMIT2, 0.05e18);
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        quote = _getQuote(address(adapter), address(0), WSTETH);
+
+        // we expect redeem to revert
+        vm.expectRevert();
+        rollerPeriphery.redeem(autoRoller, 0.02e18, alice, 0, data, quote);
+
+        vm.stopPrank();
+
+        // we can redeem if we force the approval of YTs
+        // approve Periphery to pull RLV's 0.05 YTs 
+        vm.prank(address(autoRoller));
+        ERC20(YT).approve(address(peripheryV2), 0.01e18);
+        vm.prank(alice);
+        rollerPeriphery.redeem(autoRoller, 0.02e18, alice, 0, data, quote);
+
+        // we can also redeem if we set the previous periphery back
+        // approve Periphery to pull RLV's 0.05 YTs 
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        divider.setPeriphery(address(periphery));
+        vm.prank(0x59A181710F926Eae6FddfbF27a14259E8DD00cA2); // deployer address
+        autoRoller.setParam("PERIPHERY", address(periphery));
+
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        vm.prank(alice);
+        rollerPeriphery.redeem(autoRoller, 0.02e18, alice, 0, data, quote);
+        
+        // warp to maturity, settle and start cooldown
+        vm.warp(maturity);
+        vm.prank(0xe09fE5ACb74c1d98507f87494Cf6AdEBD3B26b1e); // roller address
+        autoRoller.settle();
+
+        // set the Periphery V2 again
+        vm.prank(AddressBook.SENSE_MULTISIG);
+        divider.setPeriphery(address(peripheryV2));
+        vm.prank(0x59A181710F926Eae6FddfbF27a14259E8DD00cA2); // deployer address
+        autoRoller.setParam("PERIPHERY", address(peripheryV2));
+
+        // warp to cooldown and roll
+        vm.warp(maturity + autoRoller.cooldown());
+        vm.prank(0xe09fE5ACb74c1d98507f87494Cf6AdEBD3B26b1e); // roller address
+        autoRoller.roll();
+
+        // can now redeem normally
+        data = _generatePermit(alicePrivKey, address(rollerPeriphery), address(autoRoller));
+        vm.prank(alice);
+        rollerPeriphery.redeem(autoRoller, 0.01e18, alice, 0, data, quote);
     }
 
     function _getQuote(

@@ -85,7 +85,7 @@ contract AutoRollerTest is Test, Permit2Helper {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0),
             Divider(AddressBook.DIVIDER_1_2_0),
-            Periphery(AddressBook.PERIPHERY_1_4_0)
+            Periphery(payable(AddressBook.PERIPHERY_1_4_0))
         );
 
         vm.label(address(spaceFactory), "SpaceFactory");

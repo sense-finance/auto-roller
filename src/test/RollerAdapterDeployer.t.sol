@@ -33,7 +33,7 @@ contract RollerAdapterDeployerTest is Test {
         
         vm.prank(AddressBook.SENSE_MULTISIG);
         Divider divider = Divider(address(AddressBook.DIVIDER_1_2_0));
-        Periphery periphery = Periphery(divider.periphery());
+        Periphery periphery = Periphery(payable(divider.periphery()));
         if (!periphery.factories(adapterFactory)) {
             periphery.setFactory(adapterFactory, true);
         }

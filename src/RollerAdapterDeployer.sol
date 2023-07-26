@@ -24,7 +24,7 @@ contract RollerAdapterDeployer {
     /// @param rewardRecipient The address of the reward recipient
     /// @param targetDuration The targeted duration in months for newly rolled series
     function deploy(address factory, address target, bytes memory data, address rewardRecipient, uint256 targetDuration) external returns (address adapter, AutoRoller autoRoller) {
-        adapter = Periphery(divider.periphery()).deployAdapter(factory, target, data);
+        adapter = Periphery(payable(divider.periphery())).deployAdapter(factory, target, data);
         AutoRollerFactory rlvFactory = AutoRollerFactory(OwnableFactoryLike(factory).rlvFactory());
         autoRoller = rlvFactory.create(OwnedAdapterLike(adapter), rewardRecipient, targetDuration);
         autoRoller.setParam("OWNER", msg.sender);
