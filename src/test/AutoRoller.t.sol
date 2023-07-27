@@ -85,7 +85,7 @@ contract AutoRollerTest is Test, Permit2Helper {
             BalancerVault(AddressBook.BALANCER_VAULT),
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0),
             Divider(AddressBook.DIVIDER_1_2_0),
-            Periphery(payable(AddressBook.PERIPHERY_1_4_0))
+            Periphery(payable(AddressBook.PERIPHERY_2_0_0))
         );
 
         vm.label(address(spaceFactory), "SpaceFactory");
@@ -95,7 +95,7 @@ contract AutoRollerTest is Test, Permit2Helper {
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
 
-        stake = ERC20(AddressBook.USDT);
+        stake = ERC20(AddressBook.DAI);
 
         mockAdapterParams = BaseAdapter.AdapterParams({
             oracle: address(0),
@@ -783,7 +783,7 @@ contract AutoRollerTest is Test, Permit2Helper {
         // 4. Redeem (2nd half of sandwich)
         before = target.balanceOf(address(this));
         autoRoller.redeem(autoRoller.balanceOf(address(this)), address(this), address(this));
-        OldPeripheryLike periphery = OldPeripheryLike(AddressBook.PERIPHERY_1_4_0);
+        OldPeripheryLike periphery = OldPeripheryLike(AddressBook.PERIPHERY_2_0_0);
         yt.approve(address(periphery), type(uint256).max);
         periphery.swapYTsForTarget(address(mockAdapter), autoRoller.maturity(), ytBal);
         aafter = target.balanceOf(address(this));

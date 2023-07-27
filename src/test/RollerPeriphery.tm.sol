@@ -43,7 +43,7 @@ contract AutoRollerMainnetTest is Test, Permit2Helper {
 
     BalancerVault balancerVault = BalancerVault(AddressBook.BALANCER_VAULT);
     SpaceFactoryLike spaceFactory = SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0);
-    Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_1_4_0));
+    Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_2_0_0));
     Divider divider = Divider(spaceFactory.divider());
 
     ERC20 target = ERC20(AddressBook.MORPHO_DAI);
