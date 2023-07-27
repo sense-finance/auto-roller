@@ -59,8 +59,7 @@ contract MainnetDeploymentScript is Script {
             SpaceFactoryLike(AddressBook.SPACE_FACTORY_1_3_0)
         );
 
-        // TODO: replace for new periphery once its deployed
-        Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_1_4_0)); 
+        Periphery periphery = Periphery(payable(AddressBook.PERIPHERY_2_0_0)); 
         Divider divider = Divider(spaceFactory.divider());
         AutoRollerFactory arFactory = AutoRollerFactory(AddressBook.RLV_FACTORY);
 
@@ -70,30 +69,51 @@ contract MainnetDeploymentScript is Script {
 
         vm.startBroadcast(deployer); // deploy from deployer address
 
-        RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2), AddressBook.EXCHANGE_PROXY);
+        RollerPeriphery rollerPeriphery = RollerPeriphery(payable(0x8f66a9a5a4387092d34A4adC99f739819BE14869));
+        // RollerPeriphery rollerPeriphery = new RollerPeriphery(IPermit2(AddressBook.PERMIT2), AddressBook.EXCHANGE_PROXY);
         console2.log("- RollerPeriphery deployed @ ", address(rollerPeriphery));
 
         console.log("- Add AutoRoller factory as trusted on RollerPeriphery");
-        rollerPeriphery.setIsTrusted(address(arFactory), true);
+        if (rollerPeriphery.isTrusted(address(arFactory)) == false) {
+            rollerPeriphery.setIsTrusted(address(arFactory), true);
+        } else {
+            console.log("   - Skipping: AutoRoller factory is already trusted");
+        }
 
         _doApprovals(rollerPeriphery);
 
         vm.stopBroadcast();
 
+        console.log("-------------------------------------------------------");
+        console.log("ADMIN ACTIONS (MUST BE DONE WITH DEFENDER)");
+        console.log("-------------------------------------------------------");
         // mainnet would require multisig to make these calls
         if (chainId != MAINNET) {
-            console.log("- Fund multisig to be able to make calls from that address");
             vm.deal(senseMultisig, 1 ether);
 
             // broadcast following txs from multisig
             vm.startPrank(address(senseMultisig));
 
-            arFactory.setRollerPeriphery(address(rollerPeriphery));
-            console2.log("- New RollerPeriphery has been set on AutoRoller factory");
+            console2.log("- Set new RollerPeriphery on AutoRoller factory");
+            if (address(arFactory.rollerPeriphery()) != address(rollerPeriphery)) {
+                arFactory.setRollerPeriphery(address(rollerPeriphery));
+                console2.log("   - New RollerPeriphery has been set!");
+            } else {
+                console.log("   - Skipping: RollerPeriphery is already set!");
+            }
             
-            // TODO: replace for new periphery once its deployed
-            arFactory.setPeriphery(AddressBook.PERIPHERY_1_4_0);
-            console2.log("- New Periphery has been set on AutoRoller factory");
+            console2.log("- Set new Periphery v2 on AutoRoller factory");
+            if (address(arFactory.periphery()) != AddressBook.PERIPHERY_2_0_0) {
+                arFactory.setPeriphery(AddressBook.PERIPHERY_2_0_0);
+                console2.log("   - New Periphery has been set!");
+            } else {
+                console.log("   - Skipping: Periphery v2 is already set!");
+            }
+
+            if (divider.periphery() != address(periphery)) {
+                console.log("- Set new Periphery on Divider");
+                divider.setPeriphery(address(periphery));
+            }
 
             vm.stopPrank();
         }
@@ -101,7 +121,7 @@ contract MainnetDeploymentScript is Script {
         console.log("-------------------------------------------------------");
         console.log("Sanity check: deploy mock tokens, a mock ownable adapter and create an AutoRoller");
         console.log("-------------------------------------------------------");
-
+        
         MockERC20 target = new MockERC20("cUSDC", "cUSDC", 18);
         MockERC20 underlying = new MockERC20("USDC", "USDC", 18);
         MockERC20 stake = new MockERC20("STAKE", "ST", 18);
@@ -178,14 +198,20 @@ contract MainnetDeploymentScript is Script {
             // Allow the new roller to move the roller periphery's target
             if (target.allowance(address(rollerPeriphery), address(rlv)) == 0) {
                 rollerPeriphery.approve(target, address(rlv));
+            } else {
+                console.log("   - Skipping: RollerPeriphery already approved for target");
             }
 
             // Allow the adapter to move the roller periphery's underlying & target if it can't already
             if (underlying.allowance(address(rollerPeriphery), address(adapter)) == 0) {
                 rollerPeriphery.approve(underlying, address(adapter));
+            } else {
+                console.log("   - Skipping: RollerPeriphery already approved for underlying");
             }
             if (target.allowance(address(rollerPeriphery), address(adapter)) == 0) {
                 rollerPeriphery.approve(target, address(adapter));
+            } else {
+                console.log("   - Skipping: RollerPeriphery already approved for target");
             }
         }
     }

@@ -8,6 +8,7 @@ library AddressBook {
     address public constant DIVIDER_1_2_0 = 0x86bA3E96Be68563E41c2f5769F1AF9fAf758e6E0;
     address public constant PERIPHERY_1_3_0 = 0xFff11417a58781D3C72083CB45EF54d79Cd02437;
     address public constant PERIPHERY_1_4_0 = 0xaa17633AA5A3Cb56698838561161bdb16Cebb8E3;
+    address public constant PERIPHERY_2_0_0 = 0xAe90a191999DfA22d42c2D704f4712D6eb3cB0B3;
     address public constant SPACE_FACTORY_1_3_0 = 0x9e629751b3FE0b030C219e567156adCB70ad5541;
     address public constant OWNABLE_ERC4626_FACTORY = 0x60cD94a921C651723AFcbA8030951F2EB3Ca572a;
     address public constant EXCHANGE_PROXY = 0xDef1C0ded9bec7F1a1670819833240f027b25EfF;
